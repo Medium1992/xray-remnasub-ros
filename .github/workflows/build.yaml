@@ -62,10 +62,14 @@ jobs:
       contents: write
       packages: write
     env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       XRAY_REPO: XTLS/Xray-core
       GHCR_IMAGE: ghcr.io/medium1992/xray-remnasub-ros
       DOCKERHUB_IMAGE: medium1992/xray-remnasub-ros
+      PACKAGE_OWNER: medium1992
+      PACKAGE_NAME: xray-remnasub-ros
+      DELETE_UNTAGGED: "true"
       REQUESTED_VERSION: ${{ inputs.xray_version }}
 
     steps:
@@ -287,3 +291,129 @@ jobs:
           git add VERSIONS
           git commit -m "Auto-update: Xray ${xray}"
           git push
+
+      # Те же архивы, что ушли в артефакты, публикуются в Telegram: на роутер
+      # их обычно тянут вручную, а из чата это делать удобнее, чем из Actions.
+      # Секреты необязательные — без них шаг просто пропускается.
+      - name: Publish RouterOS archives to Telegram
+        if: steps.check.outputs.build_needed == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TELEGRAM_BOT_TOKEN}" ] || [ -z "${TELEGRAM_CHAT_ID}" ]; then
+            echo "Telegram secrets are not configured, skipping Telegram publish."
+            exit 0
+          fi
+
+          telegram_api() {
+            method=$1
+            shift
+            response=$(curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}" "$@")
+            echo "${response}" | grep -q '"ok":true' || {
+              echo "Telegram API call failed:"
+              echo "${response}"
+              exit 1
+            }
+          }
+
+          thread_data_args=()
+          thread_form_args=()
+          if [ -n "${TELEGRAM_THREAD_ID}" ]; then
+            thread_data_args=(-d "message_thread_id=${TELEGRAM_THREAD_ID}")
+            thread_form_args=(-F "message_thread_id=${TELEGRAM_THREAD_ID}")
+          fi
+
+          files_list=$(find dist -maxdepth 1 -name '*.tar.gz' -type f -printf '%f\n' | sort)
+          message=$(printf 'xray-remnasub-ros container images\n\nXray: %s\n\nDocker Hub: https://hub.docker.com/r/%s\nGHCR: %s\n\nFiles:\n%s\n\nChecksums: sha256sums.txt' \
+            "${xray}" "${DOCKERHUB_IMAGE}" "${GHCR_IMAGE}" "${files_list}")
+
+          telegram_api sendMessage \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            "${thread_data_args[@]}" \
+            --data-urlencode "text=${message}"
+
+          while IFS= read -r file; do
+            telegram_api sendDocument \
+              -F "chat_id=${TELEGRAM_CHAT_ID}" \
+              "${thread_form_args[@]}" \
+              -F "document=@${file}" \
+              -F "caption=$(basename "${file}")"
+          done < <(find dist -maxdepth 1 -name '*.tar.gz' -type f | sort)
+
+          telegram_api sendDocument \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            "${thread_form_args[@]}" \
+            -F "document=@dist/sha256sums.txt" \
+            -F "caption=sha256sums.txt"
+
+      - name: Install crane
+        if: steps.check.outputs.build_needed == 'true' && env.DELETE_UNTAGGED == 'true'
+        run: |
+          set -euo pipefail
+          curl -sL https://github.com/google/go-containerregistry/releases/download/v0.20.2/go-containerregistry_Linux_x86_64.tar.gz \
+            | sudo tar -C /usr/local/bin -xz crane
+          sudo chmod +x /usr/local/bin/crane
+          crane version
+
+      - name: Log in to GHCR with crane
+        if: steps.check.outputs.build_needed == 'true' && env.DELETE_UNTAGGED == 'true'
+        run: echo "${GITHUB_TOKEN}" | crane auth login ghcr.io -u "${PACKAGE_OWNER}" --password-stdin
+
+      # Каждая мультиарх-сборка оставляет в GHCR безымянные версии. Удалять их
+      # по одному только признаку "нет тегов" нельзя: платформенные образы под
+      # индексом тоже без тегов, и снос такого digest ломает уже
+      # опубликованный manifest. Поэтому сначала обходим все теги через crane и
+      # помечаем их дочерние digest как защищённые, а удаляем лишь то, что не
+      # попало ни в один манифест.
+      - name: Analyze GHCR package versions
+        if: steps.check.outputs.build_needed == 'true' && env.DELETE_UNTAGGED == 'true'
+        id: analyze
+        run: |
+          set -euo pipefail
+
+          page=1
+          packages_json='[]'
+          while [ "${page}" -le 10 ]; do
+            chunk=$(gh api -H "Accept: application/vnd.github+json" \
+              "/users/${PACKAGE_OWNER}/packages/container/${PACKAGE_NAME}/versions?per_page=100&page=${page}")
+            [ "$(echo "${chunk}" | jq 'length')" -gt 0 ] || break
+            packages_json=$(jq -s '.[0] + .[1]' <(echo "${packages_json}") <(echo "${chunk}"))
+            page=$((page + 1))
+          done
+          echo "Total versions: $(echo "${packages_json}" | jq 'length')"
+
+          protected=$(mktemp)
+          while IFS=$'\t' read -r digest tags; do
+            [ -n "${digest}" ] || continue
+            echo "${digest}" >> "${protected}"
+            echo "tagged ${digest} [${tags}]"
+            crane manifest "ghcr.io/${PACKAGE_OWNER}/${PACKAGE_NAME}@${digest}" 2>/dev/null \
+              | jq -r '(.manifests // [])[].digest // empty' >> "${protected}" || true
+          done < <(echo "${packages_json}" | jq -r '
+            .[] | select((.metadata.container.tags // []) | length > 0)
+            | [ .name, ((.metadata.container.tags // []) | join(",")) ] | @tsv')
+
+          sort -u "${protected}" -o "${protected}"
+
+          removable=$(echo "${packages_json}" | jq -r '
+            .[] | select((.metadata.container.tags // []) | length == 0)
+            | [ .id, .name ] | @tsv' \
+            | while IFS=$'\t' read -r id digest; do
+                grep -qxF "${digest}" "${protected}" || printf '%s\n' "${id}"
+              done | paste -sd, -)
+
+          echo "Removable version ids: ${removable:-<none>}"
+          echo "removable=${removable}" >> "${GITHUB_OUTPUT}"
+
+      - name: Delete untagged GHCR versions
+        if: steps.analyze.outputs.removable != ''
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ env.PACKAGE_NAME }}
+          package-type: container
+          package-version-ids: ${{ steps.analyze.outputs.removable }}
+          token: ${{ secrets.GITHUB_TOKEN }}

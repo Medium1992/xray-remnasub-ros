@@ -9,7 +9,6 @@
 cmd
 config
 www
-tests
 docs
 
 README*.md

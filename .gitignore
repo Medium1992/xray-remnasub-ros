@@ -1,0 +1,13 @@
+.tools/
+build/
+dist/
+*.log
+*.tmp
+*.tar
+*.tar.gz
+
+# Buildroot-rootfs для armv5: у Alpine нет образа под эту архитектуру, поэтому
+# базой служит scratch плюс этот архив. Он обязан быть в репозитории — иначе
+# checkout в CI соберёт всё, кроме armv5. В mihomo-remnasub-ros и
+# xray-proxy-ros он тоже отслеживается.
+!rootfs.tar

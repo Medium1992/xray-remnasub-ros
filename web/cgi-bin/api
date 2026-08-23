@@ -1,0 +1,891 @@
+#!/bin/sh
+set -u
+. /lib.sh
+
+json_headers() { printf 'Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'; }
+reply_error() { state_unlock; json_headers; jq -n --arg error "$1" '{ok:false,error:$error}'; exit 0; }
+# Честный разбор percent-encoding. Прежний вариант превращал '%' в '\x' и
+# скармливал строку printf '%b': браузер всё кодирует, но сырой обратный слэш
+# из запроса, отправленного не браузером, интерпретировался как escape и молча
+# портил значение. Здесь неполная или не-hex последовательность остаётся
+# литеральным текстом, а '\' не значит ничего.
+url_decode() {
+  printf '%s' "${1:-}" | awk '
+    BEGIN {
+      for (i = 0; i < 16; i++) {
+        digit[sprintf("%x", i)] = i
+        digit[sprintf("%X", i)] = i
+      }
+    }
+    {
+      line = $0
+      gsub(/\+/, " ", line)
+      out = ""
+      length_line = length(line)
+      for (i = 1; i <= length_line; i++) {
+        character = substr(line, i, 1)
+        if (character == "%" && i + 2 <= length_line) {
+          high = substr(line, i + 1, 1)
+          low = substr(line, i + 2, 1)
+          if ((high in digit) && (low in digit)) {
+            code = digit[high] * 16 + digit[low]
+            out = out (code == 0 ? "" : sprintf("%c", code))
+            i += 2
+            continue
+          }
+        }
+        out = out character
+      }
+      printf "%s", out
+    }
+  '
+}
+query_value() { printf '%s' "${QUERY_STRING:-}" | tr '&' '\n' | awk -F= -v key="$1" '$1==key{sub(/^[^=]*=/,"");print;exit}'; }
+form_value() { printf '%s' "$FORM_BODY" | tr '&' '\n' | awk -F= -v key="$1" '$1==key{sub(/^[^=]*=/,"");print;exit}' | { IFS= read -r value || true; url_decode "$value"; }; }
+
+PROBE_TEMP_DIR=
+PROBE_XRAY_PID=
+PROBE_LOCK_PATH=
+PROBE_ASSET_LEASE_DIR=
+STATE_LOCKED=
+
+state_lock() {
+  [ -z "$STATE_LOCKED" ] || return 0
+  lock_job global-state || return 1
+  STATE_LOCKED=1
+  trap 'state_unlock' EXIT
+  trap 'state_unlock; exit 1' HUP INT TERM
+}
+
+state_unlock() {
+  if [ "$STATE_LOCKED" = 1 ]; then
+    unlock_job global-state
+    STATE_LOCKED=
+    trap - EXIT HUP INT TERM
+  fi
+}
+
+probe_cleanup() {
+  if [ -n "$PROBE_XRAY_PID" ] && kill -0 "$PROBE_XRAY_PID" 2>/dev/null; then
+    kill -TERM "$PROBE_XRAY_PID" 2>/dev/null || true
+    probe_stop_attempt=0
+    while kill -0 "$PROBE_XRAY_PID" 2>/dev/null && [ "$probe_stop_attempt" -lt 10 ]; do
+      probe_stop_attempt=$((probe_stop_attempt + 1))
+      sleep 0.1
+    done
+    if kill -0 "$PROBE_XRAY_PID" 2>/dev/null; then
+      kill -KILL "$PROBE_XRAY_PID" 2>/dev/null || true
+    fi
+  fi
+  [ -z "$PROBE_XRAY_PID" ] || wait "$PROBE_XRAY_PID" 2>/dev/null || true
+  if [ -n "$PROBE_ASSET_LEASE_DIR" ]; then
+    /scripts/geodata.sh lease-release "$PROBE_ASSET_LEASE_DIR" "$$" >/dev/null 2>&1 || true
+  fi
+  case "$PROBE_TEMP_DIR" in "$RUNTIME_DIR"/probe.*) [ ! -e "$PROBE_TEMP_DIR" ] || rm -rf "$PROBE_TEMP_DIR" ;; esac
+  if [ -n "$PROBE_LOCK_PATH" ] && [ "$(cat "$PROBE_LOCK_PATH/pid" 2>/dev/null || true)" = "$$" ]; then
+    rm -f "$PROBE_LOCK_PATH/pid"
+    rmdir "$PROBE_LOCK_PATH" 2>/dev/null || true
+  fi
+  PROBE_XRAY_PID=
+  PROBE_TEMP_DIR=
+  PROBE_LOCK_PATH=
+  PROBE_ASSET_LEASE_DIR=
+}
+
+probe_lock() {
+  PROBE_LOCK_PATH=$JOBS_DIR/probe.lock
+  probe_lock_attempt=0
+  probe_lock_ownerless_attempts=0
+  while ! mkdir "$PROBE_LOCK_PATH" 2>/dev/null; do
+    probe_lock_owner=$(cat "$PROBE_LOCK_PATH/pid" 2>/dev/null || true)
+    if valid_number "$probe_lock_owner"; then
+      probe_lock_ownerless_attempts=0
+      if ! kill -0 "$probe_lock_owner" 2>/dev/null; then
+        rm -f "$PROBE_LOCK_PATH/pid"
+        rmdir "$PROBE_LOCK_PATH" 2>/dev/null || true
+      fi
+    else
+      probe_lock_ownerless_attempts=$((probe_lock_ownerless_attempts + 1))
+      if [ "$probe_lock_ownerless_attempts" -ge 50 ]; then
+        probe_lock_owner=$(cat "$PROBE_LOCK_PATH/pid" 2>/dev/null || true)
+        if ! valid_number "$probe_lock_owner"; then
+          rm -f "$PROBE_LOCK_PATH/pid"
+          rmdir "$PROBE_LOCK_PATH" 2>/dev/null || true
+          probe_lock_ownerless_attempts=0
+        fi
+      fi
+    fi
+    probe_lock_attempt=$((probe_lock_attempt + 1))
+    [ "$probe_lock_attempt" -lt 700 ] || return 1
+    sleep 0.05
+  done
+  if ! printf '%s\n' "$$" > "$PROBE_LOCK_PATH/pid"; then
+    rmdir "$PROBE_LOCK_PATH" 2>/dev/null || true
+    PROBE_LOCK_PATH=
+    return 1
+  fi
+}
+
+probe_port() {
+  probe_port_candidate=$((39000 + ($$ % 1000)))
+  probe_port_attempt=0
+  while [ "$probe_port_attempt" -lt 1000 ]; do
+    if ! nc -z -w 1 127.0.0.1 "$probe_port_candidate" >/dev/null 2>&1; then
+      printf '%s' "$probe_port_candidate"
+      return 0
+    fi
+    probe_port_candidate=$((probe_port_candidate + 1))
+    [ "$probe_port_candidate" -le 49999 ] || probe_port_candidate=39000
+    probe_port_attempt=$((probe_port_attempt + 1))
+  done
+  return 1
+}
+
+require_post() {
+  [ "${REQUEST_METHOD:-GET}" = POST ] || reply_error 'POST required'
+  host=${HTTP_HOST:-} origin=${HTTP_ORIGIN:-} referer=${HTTP_REFERER:-}
+  if [ -n "$origin" ]; then case "$origin" in "http://$host"|"https://$host") ;; *) reply_error 'Cross-origin request denied' ;; esac
+  elif [ -n "$referer" ]; then case "$referer" in "http://$host/"*|"https://$host/"*) ;; *) reply_error 'Cross-origin request denied' ;; esac
+  else reply_error 'Same-origin POST required'
+  fi
+  length=${CONTENT_LENGTH:-0}; valid_number "$length" || reply_error 'Invalid request length'
+  [ "$length" -le 65536 ] || reply_error 'Request is too large'
+  # head -c читает ровно столько байт, сколько обещал Content-Length, одним
+  # заходом. dd bs=1 делал на то же самое до 65536 отдельных read().
+  FORM_BODY=$(head -c "$length" 2>/dev/null)
+}
+
+profiles_json() {
+  profiles_tmp=$RUNTIME_DIR/profiles.$$.jsonl
+  : > "$profiles_tmp"
+  for profile in "$PROFILES_DIR"/p-*.conf; do
+    [ -f "$profile" ] || continue
+    id=${profile##*/}; id=${id%.conf}
+    meta=$(profile_meta "$id") status_file=$STATUS_DIR/$id.conf error=$ERRORS_DIR/$id.txt
+    # Три запуска awk на профиль вместо тридцати семи: вебка опрашивает статус
+    # раз в три секунды, и на роутере эти форки были заметной статьёй расхода.
+    { read -r name_b64
+      read -r url_b64
+      read -r headers_b64
+      read -r use_profile_headers
+      read -r selected
+      read -r selected_fingerprint
+      read -r refresh
+      read -r timeout
+      read -r insecure
+      read -r use_provider_title
+      read -r use_provider_interval
+    } <<EOF
+$(state_load "$profile" NAME_B64 URL_B64 HEADERS_B64 USE_PROFILE_HEADERS SELECTED_INDEX SELECTED_FINGERPRINT \
+  REFRESH_SECONDS TIMEOUT_SECONDS INSECURE_TLS USE_PROVIDER_TITLE USE_PROVIDER_INTERVAL)
+EOF
+    { read -r title_b64
+      read -r interval_b64
+      read -r fetched
+      read -r meta_bytes
+      read -r userinfo_b64
+      read -r announce_b64
+      read -r support_url_b64
+      read -r web_page_url_b64
+      read -r refill_b64
+      read -r hwid_active_b64
+      read -r hwid_unsupported_b64
+      read -r hwid_max_b64
+      read -r hwid_limit_b64
+      read -r restriction_b64
+      read -r policy_status
+      read -r meta_http_status
+      read -r meta_http_status_line_b64
+    } <<EOF
+$(state_load "$meta" TITLE_B64 INTERVAL_B64 FETCHED_EPOCH BYTES USERINFO_B64 ANNOUNCE_B64 SUPPORT_URL_B64 \
+  WEB_PAGE_URL_B64 REFILL_B64 HWID_ACTIVE_B64 HWID_UNSUPPORTED_B64 HWID_MAX_B64 HWID_LIMIT_B64 \
+  RESTRICTION_B64 POLICY_STATUS HTTP_STATUS HTTP_STATUS_LINE_B64)
+EOF
+    { read -r refresh_state
+      read -r refresh_stage
+      read -r refresh_action
+      read -r started
+      read -r finished
+      read -r status_updated
+      read -r response_bytes
+      read -r status_message_b64
+      read -r http_status
+      read -r http_status_line_b64
+      read -r validation_b64
+    } <<EOF
+$(state_load "$status_file" STATE STAGE ACTION STARTED_EPOCH FINISHED_EPOCH UPDATED BYTES MESSAGE_B64 \
+  HTTP_STATUS HTTP_STATUS_LINE_B64 VALIDATION_B64)
+EOF
+    [ -n "$refresh_state" ] || refresh_state=idle
+    [ -n "$refresh_stage" ] || refresh_stage=idle
+    [ -n "$http_status" ] || http_status=$meta_http_status
+    [ -n "$http_status_line_b64" ] || http_status_line_b64=$meta_http_status_line_b64
+    [ -n "$response_bytes" ] || response_bytes=$meta_bytes
+    [ -n "$validation_b64" ] || validation_b64=$(b64_encode "$(cat "$RUNTIME_DIR/$id.validation.log" 2>/dev/null || true)")
+    valid_number "$selected" || selected=0
+    valid_number "$refresh" || refresh=3600
+    valid_number "$timeout" || timeout=30
+    case "$insecure" in 0|1) ;; *) insecure=0 ;; esac
+    case "$use_profile_headers" in 0|1) ;; *) use_profile_headers=1 ;; esac
+    case "$use_provider_title" in 0|1) ;; *) use_provider_title=1 ;; esac
+    case "$use_provider_interval" in 0|1) ;; *) use_provider_interval=1 ;; esac
+    valid_number "$fetched" || fetched=0
+    valid_number "$started" || started=0
+    valid_number "$finished" || finished=0
+    valid_number "$status_updated" || status_updated=0
+    valid_number "$response_bytes" || response_bytes=0
+    final_version=$(cat "$STATUS_DIR/$id.version" 2>/dev/null || printf 0); valid_number "$final_version" || final_version=0
+    source_mtime=$(file_mtime "$(profile_source "$id")" 2>/dev/null || printf 0); valid_number "$source_mtime" || source_mtime=0
+    final_mtime=$(file_mtime "$(profile_runtime "$id")" 2>/dev/null || printf 0); valid_number "$final_mtime" || final_mtime=0
+    provider_refresh_seconds=0
+    provider_interval=$(b64_decode "$interval_b64" | tr -d '\r\n ')
+    valid_number "$provider_interval" && [ "$provider_interval" -ge 1 ] && [ "$provider_interval" -le 168 ] && provider_refresh_seconds=$((provider_interval * 3600))
+    effective_refresh_seconds=$refresh
+    [ "$use_provider_interval" = 0 ] || [ "$provider_refresh_seconds" -eq 0 ] || effective_refresh_seconds=$provider_refresh_seconds
+    display_name_b64=$name_b64
+    if [ "$use_provider_title" = 1 ]; then
+      provider_title=$(b64_decode "$title_b64")
+      case "$provider_title" in base64:*) provider_title=$(b64_decode "${provider_title#base64:}") ;; esac
+      [ -z "$provider_title" ] || display_name_b64=$(b64_encode "$provider_title")
+    fi
+    source_file=$(profile_source "$id")
+    source_present=false; [ -s "$source_file" ] && source_present=true
+    source_empty=false
+    if [ "$source_present" = true ] && jq -e 'type == "array" and length == 0' "$source_file" >/dev/null 2>&1; then source_empty=true; fi
+    runtime_dir=$(profile_runtime_dir "$id")
+    config_present=false
+    [ -d "$runtime_dir" ] && [ -n "$(find "$runtime_dir" -maxdepth 1 -type f -name '*.json' -size +0c -print -quit 2>/dev/null)" ] && config_present=true
+    using_previous_config=false; [ "$refresh_state" != error ] || [ "$config_present" = false ] || using_previous_config=true
+    restricted=false
+    [ -z "$restriction_b64$policy_status$hwid_unsupported_b64$hwid_max_b64$hwid_limit_b64" ] || restricted=true
+    config_count=$(jq 'length' "$(profile_configs "$id")" 2>/dev/null || printf 0); valid_number "$config_count" || config_count=0
+    fail_closed=false
+    if [ "$config_present" = false ] && { [ "$restricted" = true ] || [ "$source_empty" = true ]; }; then fail_closed=true; fi
+    error_b64=$(b64_encode "$(cat "$error" 2>/dev/null || true)")
+    printf '%s\n' \
+      "$id" "$name_b64" "$display_name_b64" "$url_b64" "$headers_b64" "$selected_fingerprint" \
+      "$refresh_state" "$refresh_stage" "$refresh_action" "$status_message_b64" "$title_b64" "$interval_b64" \
+      "$userinfo_b64" "$announce_b64" "$support_url_b64" "$web_page_url_b64" "$refill_b64" \
+      "$hwid_active_b64" "$hwid_unsupported_b64" "$hwid_max_b64" "$hwid_limit_b64" \
+      "$restriction_b64" "$policy_status" "$http_status" "$http_status_line_b64" "$validation_b64" "$error_b64" | \
+    jq -Rsc \
+      --argjson use_profile_headers "$use_profile_headers" \
+      --argjson selected "$selected" \
+      --argjson refresh "$refresh" --argjson provider_refresh "$provider_refresh_seconds" --argjson effective_refresh "$effective_refresh_seconds" \
+      --argjson timeout "$timeout" --argjson insecure "$insecure" \
+      --argjson use_provider_title "$use_provider_title" --argjson use_provider_interval "$use_provider_interval" \
+      --argjson fetched "$fetched" --argjson started "$started" --argjson finished "$finished" --argjson status_updated "$status_updated" \
+      --argjson response_bytes "$response_bytes" \
+      --argjson source_present "$source_present" --argjson config_present "$config_present" --argjson using_previous "$using_previous_config" \
+      --argjson restricted "$restricted" --argjson fail_closed "$fail_closed" --argjson config_count "$config_count" \
+      --argjson source_mtime "$source_mtime" --argjson final_mtime "$final_mtime" --argjson final_version "$final_version" \
+      'split("\n") as $s |
+       {id:$s[0],name_b64:$s[1],display_name_b64:$s[2],url_b64:$s[3],headers_b64:$s[4],use_profile_headers:$use_profile_headers,selected_config_index:$selected,selected_config_fingerprint:$s[5],refresh_seconds:$refresh,provider_refresh_seconds:$provider_refresh,effective_refresh_seconds:$effective_refresh,timeout_seconds:$timeout,insecure_tls:$insecure,use_provider_title:$use_provider_title,use_provider_interval:$use_provider_interval,status:$s[6],refresh_state:$s[6],refresh_stage:$s[7],refresh_action:$s[8],status_message_b64:$s[9],fetched_at:$fetched,started_at:$started,finished_at:$finished,status_updated_at:$status_updated,title_b64:$s[10],interval_b64:$s[11],userinfo_b64:$s[12],announce_b64:$s[13],support_url_b64:$s[14],web_page_url_b64:$s[15],refill_b64:$s[16],hwid_active_b64:$s[17],hwid_unsupported_b64:$s[18],hwid_max_b64:$s[19],hwid_limit_b64:$s[20],restriction_b64:$s[21],policy_status:$s[22],http_status:$s[23],http_status_line_b64:$s[24],response_bytes:$response_bytes,validation_b64:$s[25],error_b64:$s[26],source_present:$source_present,config_present:$config_present,configuration_valid:$config_present,using_previous_config:$using_previous,restricted:$restricted,fail_closed:$fail_closed,config_count:$config_count,source_mtime:$source_mtime,final_mtime:$final_mtime,final_version:$final_version}' >> "$profiles_tmp"
+  done
+  jq -s . "$profiles_tmp"
+  rm -f "$profiles_tmp"
+}
+
+status_response() {
+  load_settings
+  status_profiles=$RUNTIME_DIR/status-profiles.$$.json
+  status_configs=$RUNTIME_DIR/status-configs.$$.json
+  status_events=$RUNTIME_DIR/status-events.$$.txt
+  if ! profiles_json > "$status_profiles"; then
+    rm -f "$status_profiles" "$status_configs" "$status_events"
+    reply_error 'Could not read profiles'
+  fi
+  active_configs=$(profile_configs "$ACTIVE_PROFILE_ID" 2>/dev/null || true)
+  if [ -s "$active_configs" ]; then
+    status_configs=$active_configs
+  else
+    printf '[]\n' > "$status_configs"
+  fi
+  tail -n 100 "$EVENT_LOG" > "$status_events" 2>/dev/null || : > "$status_events"
+  running=false; xray_pid=$(cat "$RUNTIME_DIR/xray.pid" 2>/dev/null || true); valid_number "$xray_pid" && kill -0 "$xray_pid" 2>/dev/null && running=true
+  # Версия ядра и доступность nftables определяются один раз при старте
+  # контейнера: ни то, ни другое в рантайме не меняется, а раньше каждый опрос
+  # статуса запускал ради них xray и nft.
+  backend=$(cat "$RUNTIME_DIR/firewall.backend" 2>/dev/null || true)
+  case "$backend" in nftables|iptables) ;; *) backend=iptables ;; esac
+  xray_version=$(cat "$RUNTIME_DIR/xray.version" 2>/dev/null || true)
+  active_interface=$(ip -4 route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1);exit}}')
+  active_interface_cidr=; [ -z "$active_interface" ] || active_interface_cidr=$(ip -4 -o addr show dev "$active_interface" scope global 2>/dev/null | awk '{print $4;exit}')
+  active_runtime_dir=$(profile_runtime_dir "$ACTIVE_PROFILE_ID" 2>/dev/null || true)
+  effective_listener_mode=$LISTENER_MODE
+  if [ -n "$active_runtime_dir" ]; then
+    active_runtime_listener_mode=$(jq -r '.mode // empty' "$active_runtime_dir/.metadata/listener.json" 2>/dev/null || true)
+    case "$active_runtime_listener_mode" in tproxy|redir-tproxy|redir-tun) effective_listener_mode=$active_runtime_listener_mode ;; esac
+  fi
+  xray_probe_url=$(b64_decode "$XRAY_PROBE_URL_B64")
+  geodata_asset_dir=
+  geodata_asset_count=0
+  geodata_total_bytes=0
+  geodata_last_update=0
+  geodata_warning=
+  geodata_metadata=$active_runtime_dir/.metadata/geodata.json
+  if [ -s "$geodata_metadata" ]; then
+    geodata_asset_dir=$(jq -r '.asset_dir // empty' "$geodata_metadata" 2>/dev/null || true)
+    geodata_asset_count=$(jq -r '(.assets // []) | length' "$geodata_metadata" 2>/dev/null || printf 0)
+    geodata_warning=$(jq -r '[.warnings[]? | ((.file // "geodata") + ": " + (.message // "update failed"))] | join("\n")' "$geodata_metadata" 2>/dev/null || true)
+    # Размер и время берутся с самих файлов, а не из метаданных подготовки:
+    # geodata обновляет Xray по своему расписанию, и записанные при сборке
+    # значения устаревают в тот же момент, когда ядро скачало новую версию.
+    #
+    # Размер и время снимаются через wc и file_mtime, а не через stat: в
+    # armv5-образе (Buildroot rootfs вместо Alpine) applet stat не собран, и
+    # прямой вызов там просто ничего не вернул бы. file_mtime уже умеет
+    # откатываться на date -r.
+    if [ -n "$geodata_asset_dir" ]; then
+      while IFS= read -r geodata_asset; do
+        [ -n "$geodata_asset" ] || continue
+        geodata_asset_path=$geodata_asset_dir/$geodata_asset
+        [ -f "$geodata_asset_path" ] || continue
+        geodata_size=$(wc -c < "$geodata_asset_path" 2>/dev/null || printf 0)
+        valid_number "$geodata_size" || geodata_size=0
+        geodata_total_bytes=$((geodata_total_bytes + geodata_size))
+        geodata_mtime=$(file_mtime "$geodata_asset_path" 2>/dev/null || printf 0)
+        valid_number "$geodata_mtime" || geodata_mtime=0
+        [ "$geodata_mtime" -le "$geodata_last_update" ] || geodata_last_update=$geodata_mtime
+      done <<EOF
+$(jq -r '.assets[]?.file | select(type == "string")' "$geodata_metadata" 2>/dev/null || true)
+EOF
+    fi
+  fi
+  valid_number "$geodata_asset_count" || geodata_asset_count=0
+  valid_number "$geodata_total_bytes" || geodata_total_bytes=0
+  valid_number "$geodata_last_update" || geodata_last_update=0
+  json_headers
+  jq -n \
+    --slurpfile profiles "$status_profiles" --slurpfile configs "$status_configs" --rawfile events "$status_events" --arg active "$ACTIVE_PROFILE_ID" \
+    --argjson run_enabled "$RUN_ENABLED" --argjson running "$running" --arg listener_mode "$LISTENER_MODE" \
+    --argjson redir "$REDIR_PORT" --argjson tproxy "$TPROXY_PORT" --arg log_level "$LOG_LEVEL" \
+    --arg global_headers_b64 "$GLOBAL_HEADERS_B64" \
+    --arg network_qdisc "$NETWORK_QDISC" --argjson network_disable_ipv6 "$NETWORK_DISABLE_IPV6" --argjson network_disable_multicast "$NETWORK_DISABLE_MULTICAST" \
+    --argjson network_ct_established "$NETWORK_CT_ESTABLISHED" --argjson network_ct_syn_sent "$NETWORK_CT_SYN_SENT" --argjson network_ct_syn_recv "$NETWORK_CT_SYN_RECV" \
+    --argjson network_ct_fin_wait "$NETWORK_CT_FIN_WAIT" --argjson network_ct_close_wait "$NETWORK_CT_CLOSE_WAIT" --argjson network_ct_last_ack "$NETWORK_CT_LAST_ACK" \
+    --argjson network_ct_time_wait "$NETWORK_CT_TIME_WAIT" --argjson network_ct_close "$NETWORK_CT_CLOSE" --argjson network_ct_unacknowledged "$NETWORK_CT_UNACKNOWLEDGED" --argjson network_ct_udp_stream "$NETWORK_CT_UDP_STREAM" \
+    --argjson xray_sniffing_enabled "$XRAY_SNIFFING_ENABLED" --argjson xray_sniffing_route_only "$XRAY_SNIFFING_ROUTE_ONLY" \
+    --arg xray_probe_url "$xray_probe_url" --argjson xray_probe_timeout_seconds "$XRAY_PROBE_TIMEOUT_SECONDS" --arg xray_probe_http_method "$XRAY_PROBE_HTTP_METHOD" \
+    --arg geodata_storage "$GEODATA_STORAGE" --arg geodata_asset_dir "$geodata_asset_dir" --argjson geodata_asset_count "$geodata_asset_count" \
+    --argjson geodata_total_bytes "$geodata_total_bytes" --argjson geodata_last_update "$geodata_last_update" --arg geodata_warning "$geodata_warning" \
+    --arg backend "$backend" --arg active_interface "$active_interface" --arg active_interface_cidr "$active_interface_cidr" --arg effective_listener_mode "$effective_listener_mode" --arg version "$xray_version" \
+    --arg ui_theme "$UI_THEME" --arg ui_accent "$UI_ACCENT" \
+    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
+  status_result=$?
+  rm -f "$status_profiles" "$status_events"
+  [ "$status_configs" = "$active_configs" ] || rm -f "$status_configs"
+  return "$status_result"
+}
+
+action=$(url_decode "$(query_value action)")
+case "${REQUEST_METHOD:-GET}:$action" in
+  GET:status|'GET:') status_response; exit 0 ;;
+  GET:source|GET:config)
+    id=$(url_decode "$(query_value profile_id)"); valid_profile_id "$id" || reply_error 'Invalid profile'
+    [ "$action" = source ] && file=$(profile_source "$id") || file=$(profile_runtime "$id")
+    printf 'Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
+    [ -f "$file" ] && cat "$file" || printf 'null\n'
+    exit 0
+    ;;
+esac
+
+require_post
+case "$action" in
+  create)
+    state_lock || reply_error 'Could not lock container state'
+    id=p-$(date +%s); suffix=0
+    while [ -e "$PROFILES_DIR/$id.conf" ]; do suffix=$((suffix+1)); id=p-$(date +%s)-$suffix; done
+    name=$(form_value name); [ -n "$name" ] || name='Новая подписка'
+    profile_tmp=$RUNTIME_DIR/$id.profile.$$
+    cat > "$profile_tmp" <<EOF
+PROFILE_VERSION=1
+NAME_B64=$(b64_encode "$name")
+URL_B64=
+HEADERS_B64=
+USE_PROFILE_HEADERS=1
+SELECTED_INDEX=0
+SELECTED_FINGERPRINT=
+REFRESH_SECONDS=3600
+TIMEOUT_SECONDS=30
+INSECURE_TLS=0
+USE_PROVIDER_TITLE=1
+USE_PROVIDER_INTERVAL=1
+EOF
+    atomic_replace "$profile_tmp" "$PROFILES_DIR/$id.conf" || reply_error 'Could not create profile'
+    chmod 600 "$PROFILES_DIR/$id.conf" 2>/dev/null || true
+    state_unlock
+    json_headers; jq -n --arg id "$id" '{ok:true,id:$id}'
+    ;;
+  save-profile)
+    id=$(form_value profile_id); profile=$(profile_path "$id") || reply_error 'Invalid profile'
+    [ -f "$profile" ] || reply_error 'Profile not found'
+    name=$(form_value name); url=$(form_value url); headers=$(form_value headers)
+    refresh=$(form_value refresh_seconds); timeout=$(form_value timeout_seconds); insecure=$(form_value insecure_tls)
+    use_profile_headers=$(form_value use_profile_headers); use_provider_title=$(form_value use_provider_title); use_provider_interval=$(form_value use_provider_interval)
+    [ -n "$use_profile_headers" ] || use_profile_headers=$(state_get "$profile" USE_PROFILE_HEADERS 1)
+    [ -n "$use_provider_title" ] || use_provider_title=$(state_get "$profile" USE_PROVIDER_TITLE 1)
+    [ -n "$use_provider_interval" ] || use_provider_interval=$(state_get "$profile" USE_PROVIDER_INTERVAL 1)
+    [ -n "$name" ] || reply_error 'Name is required'
+    [ "$(printf '%s' "$name" | tr -d '\r\n')" = "$name" ] && [ "${#name}" -le 80 ] || reply_error 'Name must be one line and at most 80 characters'
+    case "$url" in http://*|https://*) ;; *) reply_error 'URL must use HTTP or HTTPS' ;; esac
+    [ "$(printf '%s' "$url" | tr -d '\r\n')" = "$url" ] && [ "${#url}" -le 4096 ] || reply_error 'URL must be one line and at most 4096 characters'
+    valid_header_block "$headers" || reply_error 'Headers contain an invalid or duplicate name'
+    valid_number "$refresh" && [ "$refresh" -ge 60 ] && [ "$refresh" -le 604800 ] || reply_error 'Refresh must be 60..604800 seconds'
+    valid_number "$timeout" && [ "$timeout" -ge 3 ] && [ "$timeout" -le 120 ] || reply_error 'Timeout must be 3..120 seconds'
+    case "$insecure" in 0|1) ;; *) insecure=0 ;; esac
+    case "$use_profile_headers:$use_provider_title:$use_provider_interval" in [01]:[01]:[01]) ;; *) reply_error 'Invalid profile switches' ;; esac
+    lock_job "$id-selection" || reply_error 'Could not lock profile configuration'
+    if [ ! -f "$profile" ]; then
+      unlock_job "$id-selection"
+      reply_error 'Profile not found'
+    fi
+    old_fetch_signature="$(state_get "$profile" URL_B64)|$(state_get "$profile" HEADERS_B64)|$(state_get "$profile" USE_PROFILE_HEADERS 1)|$(state_get "$profile" TIMEOUT_SECONDS 30)|$(state_get "$profile" INSECURE_TLS 0)"
+    selected=$(state_get "$profile" SELECTED_INDEX 0); valid_number "$selected" || selected=0
+    selected_fingerprint=$(state_get "$profile" SELECTED_FINGERPRINT)
+    profile_tmp=$RUNTIME_DIR/$id.profile.$$
+    cat > "$profile_tmp" <<EOF
+PROFILE_VERSION=1
+NAME_B64=$(b64_encode "$name")
+URL_B64=$(b64_encode "$url")
+HEADERS_B64=$(b64_encode "$headers")
+USE_PROFILE_HEADERS=$use_profile_headers
+SELECTED_INDEX=$selected
+SELECTED_FINGERPRINT=$selected_fingerprint
+REFRESH_SECONDS=$refresh
+TIMEOUT_SECONDS=$timeout
+INSECURE_TLS=$insecure
+USE_PROVIDER_TITLE=$use_provider_title
+USE_PROVIDER_INTERVAL=$use_provider_interval
+EOF
+    if ! atomic_replace "$profile_tmp" "$profile"; then
+      unlock_job "$id-selection"
+      reply_error 'Could not save profile'
+    fi
+    unlock_job "$id-selection"
+    new_fetch_signature="$(b64_encode "$url")|$(b64_encode "$headers")|$use_profile_headers|$timeout|$insecure"
+    queued=
+    if [ "$old_fetch_signature" != "$new_fetch_signature" ] || [ ! -s "$(profile_source "$id")" ]; then
+      queued=fetch
+    fi
+    [ -z "$queued" ] || queue_job "$id" "$queued" || reply_error 'Could not queue refresh'
+    json_headers; jq -n --arg queued "$queued" '{ok:true,queued:$queued}'
+    ;;
+  refresh|rebuild)
+    id=$(form_value profile_id); profile=$(profile_path "$id") || reply_error 'Invalid profile'
+    [ -f "$profile" ] || reply_error 'Profile not found'
+    if [ "$action" = refresh ]; then
+      [ -n "$(b64_decode "$(state_get "$profile" URL_B64)")" ] || reply_error 'Configure the subscription URL first'
+      job=fetch
+    else
+      [ -s "$(profile_source "$id")" ] || reply_error 'Download the subscription first'
+      job=build
+    fi
+    queue_job "$id" "$job" || reply_error 'Could not queue job'
+    json_headers; printf '{"ok":true}\n'
+    ;;
+  select-config)
+    id=$(form_value profile_id); profile=$(profile_path "$id") || reply_error 'Invalid profile'; [ -f "$profile" ] || reply_error 'Profile not found'
+    selected=$(form_value config_index); valid_number "$selected" || reply_error 'Invalid configuration'
+    lock_job "$id-selection" || reply_error 'Could not lock profile selection'
+    if [ ! -f "$profile" ]; then
+      unlock_job "$id-selection"
+      reply_error 'Profile not found'
+    fi
+    configs=$(profile_configs "$id")
+    selected_fingerprint=$(jq -r --argjson selected "$selected" '.[] | select(.index == $selected) | .fingerprint // empty' "$configs" 2>/dev/null | head -n1)
+    if [ -z "$selected_fingerprint" ]; then
+      unlock_job "$id-selection"
+      reply_error 'Configuration not found'
+    fi
+    previous_index=$(state_get "$profile" SELECTED_INDEX 0); valid_number "$previous_index" || previous_index=0
+    previous_fingerprint=$(state_get "$profile" SELECTED_FINGERPRINT)
+    if [ "$previous_index" = "$selected" ] && [ "$previous_fingerprint" = "$selected_fingerprint" ]; then
+      unlock_job "$id-selection"
+      json_headers; printf '{"ok":true,"changed":false,"queued":""}\n'
+      exit 0
+    fi
+    if ! set_profile_selection "$profile" "$selected" "$selected_fingerprint"; then
+      unlock_job "$id-selection"
+      reply_error 'Could not save selection'
+    fi
+    if ! queue_job_locked "$id" build; then
+      set_profile_selection "$profile" "$previous_index" "$previous_fingerprint" >/dev/null 2>&1 || true
+      unlock_job "$id-selection"
+      reply_error 'Could not queue configuration change'
+    fi
+    unlock_job "$id-selection"
+    json_headers; printf '{"ok":true,"changed":true,"queued":"build"}\n'
+    ;;
+  probe-config)
+    id=$(form_value profile_id); profile=$(profile_path "$id") || reply_error 'Invalid profile'; [ -f "$profile" ] || reply_error 'Profile not found'
+    probe_index=$(form_value config_index); valid_number "$probe_index" || reply_error 'Invalid configuration'
+    command -v nc >/dev/null 2>&1 || reply_error 'Health check is unavailable'
+    command -v wget >/dev/null 2>&1 || reply_error 'Health check is unavailable'
+    probe_lock || { probe_cleanup; reply_error 'Another health check is still running'; }
+    umask 077
+    probe_nonce=$(openssl rand -hex 8 2>/dev/null || printf '%s-%s' "$$" "$(date +%s)")
+    PROBE_TEMP_DIR=$RUNTIME_DIR/probe.$probe_nonce
+    if ! mkdir -m 700 "$PROBE_TEMP_DIR" 2>/dev/null; then
+      probe_cleanup
+      reply_error 'Could not prepare health check'
+    fi
+    trap 'probe_cleanup' 0
+    trap 'exit 1' HUP INT TERM
+    probe_raw=$PROBE_TEMP_DIR/source.json
+    probe_expected_fingerprint=
+    probe_source=$(profile_source "$id")
+    probe_source_ready=0
+    if lock_job "$id-selection"; then
+      configs=$(profile_configs "$id" 2>/dev/null || true)
+      probe_expected_fingerprint=$(jq -r --argjson selected "$probe_index" '.[] | select(.index == $selected) | .fingerprint // empty' "$configs" 2>/dev/null | head -n1)
+      if [ -n "$probe_expected_fingerprint" ] && [ -s "$probe_source" ] &&
+         jq -e --argjson selected "$probe_index" '.[$selected] | type == "object" and (.outbounds | type == "array")' "$probe_source" >/dev/null 2>&1 &&
+         jq --argjson selected "$probe_index" '.[$selected]' "$probe_source" > "$probe_raw"; then
+        probe_source_ready=1
+      fi
+      unlock_job "$id-selection"
+    fi
+    [ "$probe_source_ready" = 1 ] || reply_error 'Configuration not found'
+    probe_canonical=$PROBE_TEMP_DIR/canonical.json
+    if ! jq -cS . "$probe_raw" > "$probe_canonical"; then
+      reply_error 'Could not read configuration'
+    fi
+    probe_actual_fingerprint=$(tr -d '\n' < "$probe_canonical" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}')
+    [ "$probe_actual_fingerprint" = "$probe_expected_fingerprint" ] || reply_error 'Configuration metadata is stale'
+    load_settings
+    probe_geodata_overlay=$PROBE_TEMP_DIR/geodata-overlay.json
+    probe_geodata_metadata=$PROBE_TEMP_DIR/geodata-metadata.json
+    probe_geodata_log=$PROBE_TEMP_DIR/geodata.log
+    if ! /scripts/geodata.sh prepare-probe "$probe_raw" "$probe_geodata_overlay" "$probe_geodata_metadata" "$GEODATA_STORAGE" 2> "$probe_geodata_log"; then
+      probe_geodata_error=$(tail -n 5 "$probe_geodata_log" 2>/dev/null | tr '\r\n' '  ' | head -c 1024)
+      reply_error "${probe_geodata_error:-Could not prepare geodata for health check}"
+    fi
+    probe_asset_dir=$(jq -r '.asset_dir // empty' "$probe_geodata_metadata" 2>/dev/null || true)
+    case "$GEODATA_STORAGE:$probe_asset_dir" in
+      memory:"$RUNTIME_DIR"/geodata/*|persistent:"$APP_DIR"/geodata/*) [ -d "$probe_asset_dir" ] || reply_error 'Geodata is not ready' ;;
+      *) reply_error 'Geodata is not ready' ;;
+    esac
+    if ! /scripts/geodata.sh lease-acquire "$probe_asset_dir" "$$"; then
+      reply_error 'Geodata is busy'
+    fi
+    PROBE_ASSET_LEASE_DIR=$probe_asset_dir
+    probe_default_url=$(b64_decode "$XRAY_PROBE_URL_B64")
+    probe_default_url_valid=1
+    case "$probe_default_url" in http://*|https://*) ;; *) probe_default_url_valid=0 ;; esac
+    case "$probe_default_url" in *[[:space:]]*) probe_default_url_valid=0 ;; esac
+    [ "${#probe_default_url}" -le 2048 ] || probe_default_url_valid=0
+    [ "$probe_default_url_valid" = 1 ] || probe_default_url=https://www.gstatic.com/generate_204
+    probe_plan=$PROBE_TEMP_DIR/plan.json
+    if ! jq \
+      --arg default_url "$probe_default_url" \
+      --arg default_method "$XRAY_PROBE_HTTP_METHOD" \
+      --argjson default_timeout "$XRAY_PROBE_TIMEOUT_SECONDS" '
+      def ascii_space:
+        . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32;
+      def ascii_digit:
+        . >= 48 and . <= 57;
+      def numeric_text:
+        type == "string" and length > 0 and (explode | all(.[]; ascii_digit));
+      def decimal_text:
+        type == "string" and
+        (split(".") as $parts |
+         (($parts | length) == 1 and ($parts[0] | numeric_text)) or
+         (($parts | length) == 2 and all($parts[]; numeric_text)));
+      def trim_left_space:
+        if length > 0 and (.[0] | ascii_space) then .[1:] | trim_left_space else . end;
+      def trim_space:
+        explode | trim_left_space | reverse | trim_left_space | reverse | implode;
+      def wait_duration:
+        (if endswith("ms") then {amount:.[0:-2],unit:"ms"}
+         elif endswith("s") then {amount:.[0:-1],unit:"s"}
+         elif endswith("m") then {amount:.[0:-1],unit:"m"}
+         else null end) as $duration |
+        if $duration != null and ($duration.amount | decimal_text) then $duration else null end;
+      def http_method_char:
+        . as $code |
+        ($code >= 48 and $code <= 57) or ($code >= 65 and $code <= 90) or
+        ([33,35,36,37,38,39,42,43,45,46,94,95,96,124,126] | index($code)) != null;
+      def http_method:
+        type == "string" and length > 0 and length <= 32 and
+        (explode | all(.[]; http_method_char));
+      def proxy:
+        type == "object" and
+        ((.protocol? // "" | tostring | ascii_downcase) as $protocol |
+          (["freedom","blackhole","dns","loopback"] | index($protocol)) == null);
+      def selectors($value):
+        [($value // [])[] | select(type == "string")];
+      def matching($outbounds; $selectors):
+        [$outbounds[] as $outbound |
+          ($outbound.tag? // null) as $tag |
+          select(($tag | type) == "string" and ($tag | length) > 0) |
+          select(any($selectors[]; . as $selector | $tag | startswith($selector))) |
+          $outbound];
+      def unique_tags:
+        reduce .[] as $outbound ([];
+          if any(.[]; .tag == $outbound.tag) then . else . + [$outbound] end);
+      def timeout_value($value; $fallback):
+        if ($value | type) == "string" and ($value | length) > 0 then $value else (($fallback | tostring) + "s") end;
+      def wait_seconds($value; $fallback):
+        if ($value | type) == "string" and ($value | length) > 0 then
+          ($value | wait_duration) as $duration |
+          if $duration != null then
+            (($duration.amount | tonumber) * (if $duration.unit == "ms" then 0.001 elif $duration.unit == "m" then 60 else 1 end) | ceil) as $seconds |
+            if $seconds < 1 then 1 elif $seconds > 120 then 120 else $seconds end
+          else 120 end
+        else $fallback end;
+      . as $config |
+      [($config.outbounds // [])[] | select(proxy)] as $outbounds |
+      selectors($config.burstObservatory.subjectSelector) as $burst_selectors |
+      selectors($config.observatory.subjectSelector) as $regular_selectors |
+      (matching($outbounds; $burst_selectors) | unique_tags) as $burst_targets |
+      (matching($outbounds; $regular_selectors) | unique_tags) as $regular_targets |
+      if ($burst_targets | length) > 0 then
+        (($config.burstObservatory.pingConfig.timeout // null) as $timeout |
+         ($config.burstObservatory.pingConfig.httpMethod // $default_method | tostring | trim_space | ascii_upcase) as $method |
+        {source:"burst",targets:$burst_targets,url:($config.burstObservatory.pingConfig.destination // $default_url),
+         timeout:timeout_value($timeout; $default_timeout),wait_timeout:wait_seconds($timeout; $default_timeout),
+         method:(if ($method | http_method) then $method else $default_method end)})
+      elif ($regular_targets | length) > 0 then
+        {source:"observatory",targets:$regular_targets,url:($config.observatory.probeURL // $default_url),timeout:"5s",wait_timeout:5,method:"GET"}
+      elif ($outbounds | length) > 0 then
+        {source:"default",targets:$outbounds[0:1],url:$default_url,timeout:(($default_timeout | tostring) + "s"),wait_timeout:$default_timeout,method:$default_method}
+      else
+        {source:"none",targets:[],url:$default_url,timeout:(($default_timeout | tostring) + "s"),wait_timeout:$default_timeout,method:$default_method}
+      end
+    ' "$probe_raw" > "$probe_plan"; then
+      reply_error 'Could not prepare health check'
+    fi
+    probe_total=$(jq -r '.targets | length' "$probe_plan" 2>/dev/null)
+    valid_number "$probe_total" || reply_error 'Could not count proxy outbounds'
+    [ "$probe_total" -ge 1 ] || reply_error 'Configuration has no proxy outbound to check'
+    [ "$probe_total" -le 16 ] || reply_error 'Configuration has more than 16 proxy outbounds to check'
+    probe_source_kind=$(jq -r '.source' "$probe_plan")
+    probe_url=$(jq -r '.url // empty' "$probe_plan")
+    probe_timeout=$(jq -r '.timeout' "$probe_plan")
+    probe_wait_timeout=$(jq -r '.wait_timeout' "$probe_plan")
+    probe_method=$(jq -r '.method' "$probe_plan")
+    probe_url_valid=1
+    case "$probe_url" in http://*|https://*) ;; *) probe_url_valid=0 ;; esac
+    case "$probe_url" in *[[:space:]]*) probe_url_valid=0 ;; esac
+    [ "${#probe_url}" -le 2048 ] || probe_url_valid=0
+    [ "$probe_url_valid" = 1 ] || probe_url=$probe_default_url
+    valid_number "$probe_wait_timeout" && [ "$probe_wait_timeout" -ge 1 ] && [ "$probe_wait_timeout" -le 120 ] || probe_wait_timeout=$XRAY_PROBE_TIMEOUT_SECONDS
+    probe_metrics_port=$(probe_port) || reply_error 'No local port is available for health check'
+    probe_prefix=remnasub-probe-$probe_nonce-
+    probe_target_prefix=${probe_prefix}out-
+    while jq -e --arg prefix "$probe_target_prefix" 'any(.outbounds[]?; (.tag? | type == "string" and startswith($prefix)))' "$probe_raw" >/dev/null 2>&1; do
+      probe_target_prefix=${probe_target_prefix}x
+    done
+    probe_config=$PROBE_TEMP_DIR/config.json
+    if ! jq \
+      --slurpfile plan "$probe_plan" \
+      --arg target_prefix "$probe_target_prefix" \
+      --arg metrics_tag "${probe_prefix}metrics" \
+      --arg metrics_listen "127.0.0.1:$probe_metrics_port" \
+      --arg url "$probe_url" \
+      --arg method "$probe_method" \
+      --arg timeout "$probe_timeout" \
+      --arg asset_dir "$probe_asset_dir" '
+      . as $config |
+      $plan[0] as $probe |
+      ($probe.targets | to_entries | map(.value + {tag:($target_prefix + (.key | tostring))})) as $clones |
+      $config |
+      del(.api,.metrics,.observatory,.burstObservatory,.geodata,.reverse) |
+      .env = (($config.env // {}) + {"xray.location.asset":$asset_dir}) |
+      .log = {loglevel:"error"} |
+      .stats = {} |
+      .inbounds = [] |
+      .outbounds = (($config.outbounds // []) + $clones) |
+      .metrics = {tag:$metrics_tag,listen:$metrics_listen} |
+      if $probe.source == "observatory" then
+        .observatory = {subjectSelector:[$target_prefix],probeURL:$url,probeInterval:"1h",enableConcurrency:true}
+      else
+        .burstObservatory = {subjectSelector:[$target_prefix],pingConfig:{destination:$url,connectivity:"",interval:"1h",sampling:1,timeout:$timeout,httpMethod:$method}}
+      end
+    ' "$probe_raw" > "$probe_config"; then
+      reply_error 'Could not assemble health check configuration'
+    fi
+    if ! XRAY_LOCATION_ASSET="$probe_asset_dir" xray run -test -c "$probe_config" > "$PROBE_TEMP_DIR/xray.log" 2>&1; then
+      reply_error 'Xray rejected health check configuration'
+    fi
+    XRAY_LOCATION_ASSET="$probe_asset_dir" xray run -c "$probe_config" > "$PROBE_TEMP_DIR/xray.log" 2>&1 &
+    PROBE_XRAY_PID=$!
+    probe_metrics=$PROBE_TEMP_DIR/metrics.json
+    probe_metrics_tmp=$PROBE_TEMP_DIR/metrics.tmp
+    probe_metrics_ready=0
+    probe_seen=0
+    probe_deadline=$(( $(date +%s) + probe_wait_timeout + 5 ))
+    while [ "$(date +%s)" -le "$probe_deadline" ]; do
+      if wget -q -Y off -T 1 -O "$probe_metrics_tmp" "http://127.0.0.1:$probe_metrics_port/debug/vars" 2>/dev/null &&
+         jq -e 'type == "object"' "$probe_metrics_tmp" >/dev/null 2>&1; then
+        mv "$probe_metrics_tmp" "$probe_metrics"
+        probe_metrics_ready=1
+        probe_seen=$(jq -r --arg prefix "$probe_target_prefix" '((.observatory // {}) | to_entries | map(select(.key | startswith($prefix))) | length)' "$probe_metrics" 2>/dev/null)
+        valid_number "$probe_seen" || probe_seen=0
+        [ "$probe_seen" -lt "$probe_total" ] || break
+      fi
+      kill -0 "$PROBE_XRAY_PID" 2>/dev/null || break
+      sleep 0.1
+    done
+    [ "$probe_metrics_ready" = 1 ] || reply_error 'Xray health check could not start'
+    probe_result=$(jq -c --arg prefix "$probe_target_prefix" '
+      [((.observatory // {}) | to_entries[]) | select(.key | startswith($prefix)) | .value] as $results |
+      [$results[] | select(.alive == true)] as $alive |
+      {alive:($alive | length),delay_ms:([$alive[] | .delay | select(type == "number" and . >= 0)] | min // null)}
+    ' "$probe_metrics" 2>/dev/null)
+    [ -n "$probe_result" ] || probe_result='{"alive":0,"delay_ms":null}'
+    probe_alive=$(printf '%s' "$probe_result" | jq -r '.alive')
+    probe_delay=$(printf '%s' "$probe_result" | jq -c '.delay_ms')
+    valid_number "$probe_alive" || probe_alive=0
+    [ "$probe_alive" -gt 0 ] && probe_reachable=true || probe_reachable=false
+    probe_cleanup
+    trap - 0 HUP INT TERM
+    json_headers
+    jq -n \
+      --argjson index "$probe_index" --argjson reachable "$probe_reachable" --argjson delay "$probe_delay" \
+      --argjson alive "$probe_alive" --argjson total "$probe_total" --arg method "$probe_method" --arg source "$probe_source_kind" \
+      '{ok:true,index:$index,reachable:$reachable,delay_ms:$delay,alive:$alive,total:$total,method:$method,source:$source}'
+    ;;
+  select)
+    id=$(form_value profile_id); profile=$(profile_path "$id") || reply_error 'Invalid profile'; [ -f "$profile" ] || reply_error 'Profile not found'
+    state_lock || reply_error 'Could not lock container state'
+    [ -f "$profile" ] || reply_error 'Profile not found'
+    load_settings; ACTIVE_PROFILE_ID=$id
+    write_state || reply_error 'Could not save active profile'
+    state_unlock
+    runtime_dir=$(profile_runtime_dir "$id")
+    if [ -d "$runtime_dir" ] && [ -n "$(find "$runtime_dir" -maxdepth 1 -type f -name '*.json' -size +0c -print -quit 2>/dev/null)" ]; then
+      [ "$RUN_ENABLED" = 1 ] && kill -HUP 1 2>/dev/null || true
+    elif [ -s "$(profile_source "$id")" ]; then
+      queue_job "$id" build || true
+    elif [ -n "$(b64_decode "$(state_get "$profile" URL_B64)")" ]; then
+      queue_job "$id" fetch || true
+    fi
+    json_headers; printf '{"ok":true}\n'
+    ;;
+  delete)
+    id=$(form_value profile_id); state_lock || reply_error 'Could not lock container state'
+    load_settings; [ "$id" != "$ACTIVE_PROFILE_ID" ] || reply_error 'Active profile cannot be deleted'
+    valid_profile_id "$id" || reply_error 'Invalid profile'
+    lock_job "$id-selection" || reply_error 'Could not lock profile configuration'
+    if ! clear_profile_runtime "$id"; then
+      unlock_job "$id-selection"
+      reply_error 'Could not clear profile configuration'
+    fi
+    rm -f "$PROFILES_DIR/$id.conf" "$(profile_source "$id")" "$(profile_meta "$id")" "$STATUS_DIR/$id.conf" "$STATUS_DIR/$id.version" "$ERRORS_DIR/$id.txt" "$JOBS_DIR/$id.job" "$RUNTIME_DIR/$id.validation.log" "$(profile_active_pointer "$id")"
+    rmdir "$(profile_versions_dir "$id")" 2>/dev/null || true
+    unlock_job "$id-selection"
+    state_unlock
+    json_headers; printf '{"ok":true}\n'
+    ;;
+  start|stop)
+    state_lock || reply_error 'Could not lock container state'
+    load_settings
+    if [ "$action" = start ]; then
+      active_profile=$(profile_path "$ACTIVE_PROFILE_ID") || reply_error 'Invalid active profile'
+      [ -f "$active_profile" ] || reply_error 'Active profile not found'
+      active_url=$(b64_decode "$(state_get "$active_profile" URL_B64)")
+      [ -n "$active_url" ] || reply_error 'Configure the subscription URL first'
+      RUN_ENABLED=1
+    else
+      RUN_ENABLED=0
+    fi
+    write_state || reply_error 'Could not save container state'
+    state_unlock; kill -HUP 1 2>/dev/null || true
+    json_headers; printf '{"ok":true}\n'
+    ;;
+  hash)
+    password=$(form_value password)
+    [ "${#password}" -ge 8 ] && [ "${#password}" -le 128 ] || reply_error 'Password must contain 8..128 characters'
+    password_result=$(password_hash "$password") || reply_error 'Could not generate password hash'
+    password_digest=$(printf '%s\n' "$password_result" | head -n 1)
+    password_algorithm=$(printf '%s\n' "$password_result" | tail -n 1)
+    [ -n "$password_digest" ] || reply_error 'Could not generate password hash'
+    json_headers; jq -n --arg hash "$password_digest" --arg algorithm "$password_algorithm" '{ok:true,hash:$hash,algorithm:$algorithm}'
+    ;;
+  save-settings)
+    state_lock || reply_error 'Could not lock container state'
+    load_settings
+    old_global_headers=$GLOBAL_HEADERS_B64
+    old_runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE
+    LISTENER_MODE=$(form_value listener_mode); REDIR_PORT=$(form_value redir_port); TPROXY_PORT=$(form_value tproxy_port)
+    LOG_LEVEL=$(form_value log_level)
+    NETWORK_QDISC=$(form_value network_qdisc); NETWORK_DISABLE_IPV6=$(form_value network_disable_ipv6); NETWORK_DISABLE_MULTICAST=$(form_value network_disable_multicast)
+    global_headers_present=$(form_value global_headers_present)
+    if [ "$global_headers_present" = 1 ]; then
+      global_headers=$(form_value global_headers)
+      valid_header_block "$global_headers" || reply_error 'Headers contain an invalid or duplicate name'
+      GLOBAL_HEADERS_B64=$(b64_encode "$global_headers")
+    fi
+    value=$(form_value network_ct_established); [ -z "$value" ] || NETWORK_CT_ESTABLISHED=$value
+    value=$(form_value network_ct_syn_sent); [ -z "$value" ] || NETWORK_CT_SYN_SENT=$value
+    value=$(form_value network_ct_syn_recv); [ -z "$value" ] || NETWORK_CT_SYN_RECV=$value
+    value=$(form_value network_ct_fin_wait); [ -z "$value" ] || NETWORK_CT_FIN_WAIT=$value
+    value=$(form_value network_ct_close_wait); [ -z "$value" ] || NETWORK_CT_CLOSE_WAIT=$value
+    value=$(form_value network_ct_last_ack); [ -z "$value" ] || NETWORK_CT_LAST_ACK=$value
+    value=$(form_value network_ct_time_wait); [ -z "$value" ] || NETWORK_CT_TIME_WAIT=$value
+    value=$(form_value network_ct_close); [ -z "$value" ] || NETWORK_CT_CLOSE=$value
+    value=$(form_value network_ct_unacknowledged); [ -z "$value" ] || NETWORK_CT_UNACKNOWLEDGED=$value
+    value=$(form_value network_ct_udp_stream); [ -z "$value" ] || NETWORK_CT_UDP_STREAM=$value
+    value=$(form_value xray_sniffing_enabled); [ -z "$value" ] || XRAY_SNIFFING_ENABLED=$value
+    value=$(form_value xray_sniffing_route_only); [ -z "$value" ] || XRAY_SNIFFING_ROUTE_ONLY=$value
+    probe_url=$(form_value xray_probe_url)
+    XRAY_PROBE_TIMEOUT_SECONDS=$(form_value xray_probe_timeout_seconds)
+    XRAY_PROBE_HTTP_METHOD=$(form_value xray_probe_http_method)
+    GEODATA_STORAGE=$(form_value geodata_storage)
+    case "$LISTENER_MODE" in auto|tproxy|redir-tproxy|redir-tun) ;; *) reply_error 'Invalid listener mode' ;; esac
+    valid_number "$REDIR_PORT" && [ "$REDIR_PORT" -ge 1 ] && [ "$REDIR_PORT" -le 65535 ] || reply_error 'Invalid REDIR port'
+    valid_number "$TPROXY_PORT" && [ "$TPROXY_PORT" -ge 1 ] && [ "$TPROXY_PORT" -le 65535 ] || reply_error 'Invalid TPROXY port'
+    [ "$REDIR_PORT" != "$TPROXY_PORT" ] || reply_error 'REDIR and TPROXY ports must differ'
+    for reserved_port in 80 1080; do
+      [ "$REDIR_PORT" != "$reserved_port" ] && [ "$TPROXY_PORT" != "$reserved_port" ] || reply_error 'Port is reserved by Xray RemnaSub'
+    done
+    case "$LOG_LEVEL" in none|debug|info|warning|error) ;; *) reply_error 'Invalid log level' ;; esac
+    case "$NETWORK_QDISC" in system|fq_codel|cake|codel|sfq|pfifo|bfifo) ;; *) reply_error 'Invalid qdisc' ;; esac
+    case "$NETWORK_DISABLE_IPV6" in 0|1) ;; *) NETWORK_DISABLE_IPV6=1 ;; esac
+    case "$NETWORK_DISABLE_MULTICAST" in 0|1) ;; *) NETWORK_DISABLE_MULTICAST=1 ;; esac
+    for timeout_value in "$NETWORK_CT_ESTABLISHED" "$NETWORK_CT_SYN_SENT" "$NETWORK_CT_SYN_RECV" "$NETWORK_CT_FIN_WAIT" "$NETWORK_CT_CLOSE_WAIT" "$NETWORK_CT_LAST_ACK" "$NETWORK_CT_TIME_WAIT" "$NETWORK_CT_CLOSE" "$NETWORK_CT_UNACKNOWLEDGED" "$NETWORK_CT_UDP_STREAM"; do
+      valid_number "$timeout_value" && [ "$timeout_value" -ge 1 ] && [ "$timeout_value" -le 604800 ] || reply_error 'Conntrack timeouts must be 1..604800 seconds'
+    done
+    case "$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY" in [01]:[01]) ;; *) reply_error 'Invalid sniffing settings' ;; esac
+    case "$probe_url" in http://*|https://*) ;; *) reply_error 'Health check URL must use HTTP or HTTPS' ;; esac
+    case "$probe_url" in *[[:space:]]*) reply_error 'Health check URL must not contain whitespace' ;; esac
+    [ "${#probe_url}" -le 2048 ] || reply_error 'Health check URL is too long'
+    valid_number "$XRAY_PROBE_TIMEOUT_SECONDS" && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -ge 1 ] && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -le 30 ] || reply_error 'Health check timeout must be 1..30 seconds'
+    case "$XRAY_PROBE_HTTP_METHOD" in GET|HEAD) ;; *) reply_error 'Health check method must be GET or HEAD' ;; esac
+    case "$GEODATA_STORAGE" in memory|persistent) ;; *) reply_error 'Invalid geodata storage mode' ;; esac
+    # Вид панели приезжает в той же форме, но к рантайму отношения не имеет:
+    # менять его перестройкой конфигурации и перезапуском Xray нельзя, поэтому
+    # эти два поля намеренно не входят в runtime_signature ниже.
+    ui_theme=$(form_value ui_theme); [ -z "$ui_theme" ] || UI_THEME=$ui_theme
+    ui_accent=$(form_value ui_accent)
+    if [ "$(form_value ui_accent_present)" = 1 ]; then
+      if [ -z "$ui_accent" ]; then UI_ACCENT=; else UI_ACCENT=$ui_accent; fi
+    fi
+    valid_theme "$UI_THEME" || reply_error 'Invalid interface theme'
+    [ -z "$UI_ACCENT" ] || valid_accent "$UI_ACCENT" || reply_error 'Accent colour must be #rrggbb'
+    XRAY_PROBE_URL_B64=$(b64_encode "$probe_url")
+    runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE
+    write_state || reply_error 'Could not save container settings'
+    network_settings_error=
+    if ! apply_kernel_settings > "$RUNTIME_DIR/network-settings.log" 2>&1; then
+      network_settings_error=$(tail -n 20 "$RUNTIME_DIR/network-settings.log" 2>/dev/null | tr '\r\n' '  ' | head -c 2048)
+      [ -n "$network_settings_error" ] || network_settings_error='unknown error'
+    fi
+    for settings_profile in "$PROFILES_DIR"/p-*.conf; do
+      [ -f "$settings_profile" ] || continue
+      settings_id=${settings_profile##*/}; settings_id=${settings_id%.conf}
+      if [ "$old_runtime_signature" != "$runtime_signature" ] && [ -s "$(profile_source "$settings_id")" ]; then
+        queue_job "$settings_id" build || true
+      fi
+      if [ "$old_global_headers" != "$GLOBAL_HEADERS_B64" ] && [ -n "$(b64_decode "$(state_get "$settings_profile" URL_B64)")" ]; then
+        queue_job "$settings_id" fetch || true
+      fi
+    done
+    state_unlock
+    [ -z "$network_settings_error" ] || reply_error "Could not apply Alpine network settings: $network_settings_error"
+    json_headers; printf '{"ok":true}\n'
+    ;;
+  *) reply_error 'Unknown action' ;;
+esac

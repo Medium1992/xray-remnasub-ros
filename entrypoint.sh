@@ -76,6 +76,9 @@ initialize_storage() {
   done
 }
 
+# User-Agent здесь не косметика: Remnawave по нему решает, в каком формате
+# отдать подписку, и клиентская строка — способ получить именно JSON-массив
+# конфигураций. Сам контейнер к этому клиенту отношения не имеет.
 effective_headers() {
   header_profile=$1
   load_settings

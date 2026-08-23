@@ -107,7 +107,7 @@
     ]
   },
   {
-    "remarks": "Happ sentinel",
+    "remarks": "Order sentinel",
     "outbounds": [
       {
         "tag": "sentinel",

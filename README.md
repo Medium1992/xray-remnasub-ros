@@ -1,35 +1,97 @@
-# RemnaSub Xray RoS
+[English](/README.md) | [Русский](/README_RU.md) · [Telegram](https://t.me/+96HVPF3Ww6o3YTNi)
 
-Подписочный контейнер Xray-core для MikroTik RouterOS. Он принимает Remnawave/Happ-подписку в виде массива полных Xray JSON-конфигураций, позволяет выбрать один элемент и запускает его с минимальными локальными фрагментами для перехвата трафика RouterOS.
+# xray-remnasub-ros
 
-## Возможности
+> A multi-architecture container for **MikroTik RouterOS** that runs a Remnawave/Happ subscription with [Xray-core](https://github.com/XTLS/Xray-core). The subscription is an array of complete Xray JSON configurations; the container selects one, adds only the fragments RouterOS interception needs, validates the result, and runs it. Subscription and container management is provided by an embedded BusyBox `httpd` + shell CGI WebUI.
 
-- несколько профилей подписок;
-- сохранение исходного ответа без изменений;
-- выбор полного JSON-конфига с сохранением выбора по SHA-256 fingerprint;
-- проверка итогового `confdir` командой `xray run -test` до активации;
-- откат к последнему рабочему source/runtime при ошибке транспорта, JSON, Xray или установки;
-- ручное и периодическое обновление подписок;
-- REDIR + TPROXY, чистый TPROXY и REDIR + TUN;
-- HTTP-проверка конфигурации через её реальные Xray outbound;
-- bootstrap недостающих файлов geodata до запуска ядра, обновления оставлены самому Xray;
-- встроенная веб-панель без Clash API и внешнего dashboard;
-- семь тем оформления и свой акцентный цвет, хранятся в контейнере;
-- `amd64`, `arm64`, `arm/v7` и `arm/v5`.
+[![Docker Pulls](https://img.shields.io/docker/pulls/medium1992/xray-remnasub-ros?logo=docker&label=docker%20pulls)](https://hub.docker.com/r/medium1992/xray-remnasub-ros)
+[![Docker Image Size](https://img.shields.io/docker/image-size/medium1992/xray-remnasub-ros/latest?logo=docker&label=image%20size)](https://hub.docker.com/r/medium1992/xray-remnasub-ros)
+[![License](https://img.shields.io/github/license/Medium1992/xray-remnasub-ros)](./LICENSE)
+![Platforms](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7%20%7C%20armv5-blue)
+[![Telegram](https://img.shields.io/badge/Telegram-group-blue?logo=telegram)](https://t.me/+96HVPF3Ww6o3YTNi)
 
-По умолчанию веб-панель использует `admin` / `admin`. Смените пароль перед постоянной эксплуатацией.
+## ✨ Features
 
-## Перезапуски ядра
+- 📚 Multiple subscription profiles with an active selection, manual and scheduled refresh, and per-profile settings.
+- 🧾 The provider response is stored unchanged, so the exact JSON stays inspectable even when it is invalid.
+- 🧩 The selected configuration is kept whole: `dns`, `routing`, every outbound, `dialerProxy` chains, observatories, policy and reverse sections all survive.
+- 🔗 The chosen item is pinned by SHA-256, so a provider reordering the array does not silently switch servers.
+- ✅ Atomic activation: a candidate replaces the running configuration only after `xray run -test` succeeds over the final `confdir`.
+- ♻️ An unchanged subscription leaves Xray running, so a scheduled refresh does not drop connections.
+- ↩️ Rollback to the last good source and runtime on transport, JSON, Xray, or install failures.
+- 🔀 REDIR + TPROXY, pure TPROXY, and REDIR + TUN interception, selected according to RouterOS kernel support.
+- 🩺 Real HTTP health checks through the configuration's own outbounds, not a bare TCP connect.
+- 🌍 Geodata bootstrapped before the core starts, then refreshed by Xray's own scheduler.
+- 🎨 Built-in WebUI on port `80` with colour themes, no Clash API and no external dashboard.
+- 🔐 HTTP Basic Auth with an in-app sha512crypt hash generator; no password is shared between installations.
+- 💾 Profiles persist under `/etc/xray`; generated configurations, jobs, events and geodata stay in `/dev/shm`.
+- 🌐 `amd64`, `arm64`, `armv7` and `armv5` images.
 
-Обновление подписки само по себе Xray не перезапускает. Скачанный ответ сравнивается с работающей конфигурацией — четыре фрагмента `confdir`, режим перехвата, отпечаток исходника, выбранная позиция и набор ассетов geodata, — и при полном совпадении контейнер оставляет ядро работать, а в журнале появляется `configuration unchanged`. Неизменившаяся подписка, которую опрашивают раз в час, больше не рвёт соединения клиентов.
+## 🚦 Lifecycle
 
-Сравнение идёт по всему ответу целиком, а не только по выбранной конфигурации. Поэтому если провайдер поменял сервер, который вы не используете, перезапуск всё равно произойдёт: список конфигураций в панели обязан остаться актуальным, а он хранится рядом с рабочим `confdir`.
+1. Add a URL that returns a JSON array of complete Xray configurations. Saving a new or changed URL starts a download automatically.
+2. Remnawave headers, global and optionally per-profile, are sent with the request.
+3. The response body is stored as received, then the selected item is pinned by its SHA-256 fingerprint.
+4. Container fragments are merged through `-confdir`: geodata assets, log level, and the inbounds required by the interception mode.
+5. The candidate is validated with `xray run -test` and becomes the runtime configuration only when validation succeeds.
+6. A failed update never stops a previously valid running configuration.
+7. The selected subscription and the run/stop state survive container restarts.
 
-Содержимое самих файлов geodata в сравнение не входит намеренно — см. раздел «Geodata»: их обновляет сам Xray, без перезапуска.
+## ⚡ Quick Docker Start
 
-## Формат подписки
+```bash
+docker run -d \
+  --name xray-remnasub-ros \
+  --restart unless-stopped \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun \
+  -p 8080:80 \
+  -v ./xray-remnasub:/etc/xray \
+  -e BASIC_AUTH_USER=admin \
+  -e BASIC_AUTH_HASH='$1$replace$the-generated-hash' \
+  ghcr.io/medium1992/xray-remnasub-ros:latest
+```
 
-Корень ответа должен быть JSON-массивом:
+Open `http://127.0.0.1:8080/`.
+
+Generate the hash with `openssl passwd -1 'replace-with-a-long-password'`, or from the panel's "Access" tab, which produces the stronger sha512crypt.
+
+When `BASIC_AUTH_HASH` is unset the container does not fall back to a password shared by every installation. It generates a random one on each start and prints it to the container log (`/log/print` on RouterOS, `docker logs` locally). That password changes on every restart, so set `BASIC_AUTH_HASH` for a permanent installation.
+
+## 🛠 RouterOS Installation
+
+> The example uses RouterOS 7.21+ `mountlists` and `envlists` syntax. Adjust disk paths and addresses for your router.
+
+Enable containers in device mode on a new router first:
+
+```routeros
+/system/device-mode/print
+/system/device-mode/update mode=advanced container=yes
+```
+
+```routeros
+/interface/veth/add name=XrayRemnaSub address=192.168.255.14/30 gateway=192.168.255.13
+/ip/address/add address=192.168.255.13/30 interface=XrayRemnaSub
+/container/mounts/add list=xray-remnasub-ros src=usb1/xray-remnasub dst=/etc/xray
+/container/envs/add list=xray-remnasub-ros key=BASIC_AUTH_USER value=admin
+/container/envs/add list=xray-remnasub-ros key=BASIC_AUTH_HASH value="\$1\$salt\$replace-with-your-digest"
+/container/config/set registry-url=https://ghcr.io tmpdir=usb1/pull
+/container/add remote-image=ghcr.io/medium1992/xray-remnasub-ros:latest interface=XrayRemnaSub root-dir=usb1/xray-remnasub-root mountlists=xray-remnasub-ros envlists=xray-remnasub-ros logging=yes start-on-boot=yes comment=XrayRemnaSub
+```
+
+Route selected clients through the container:
+
+```routeros
+/routing/table/add name=XrayRemnaSub fib
+/ip/route/add dst-address=0.0.0.0/0 gateway=192.168.255.14 routing-table=XrayRemnaSub check-gateway=ping comment=XrayRemnaSub
+/routing/rule/add src-address=192.168.88.100/32 action=lookup-only-in-table table=XrayRemnaSub comment="XrayRemnaSub client"
+```
+
+The container blocks gateway ICMP until Xray and the interception rules are ready, so `check-gateway=ping` gives fail-closed route health. Open the UI at `http://192.168.255.14/`.
+
+## 🧾 Subscription Model
+
+The response root must be a JSON array. Every array item is one complete Xray configuration, matching Happ semantics:
 
 ```json
 [
@@ -46,188 +108,100 @@
 ]
 ```
 
-Каждый элемент массива является отдельным полным Xray-конфигом, как в Happ. Контейнер не извлекает первый proxy outbound и не собирает общий balancer. У выбранного элемента сохраняются `dns`, `routing`, все `outbounds`, цепочки `proxySettings`/`dialerProxy`, `observatory`, `burstObservatory`, `policy`, `reverse` и остальные штатные поля.
+The container does not extract the first proxy outbound and does not synthesize a shared balancer. The selected item keeps its `dns`, `routing`, all `outbounds`, `proxySettings`/`dialerProxy` chains, observatories, policy, reverse configuration, and other native Xray fields.
 
-Поздними файлами `confdir` добавляются только:
+Later `confdir` fragments only add:
 
-- каталог assets и при необходимости стандартная секция geodata;
-- локальный уровень логирования;
-- mixed inbound `1080` и inbounds текущего режима перехвата.
+- the managed asset directory and default geodata when needed;
+- the local log level;
+- mixed port `1080` and the inbounds required by the interception mode.
 
-Исходные inbounds не удаляются. Конфликт их портов с `80`, `1080`, REDIR или TPROXY необходимо исправить в шаблоне подписки.
+Source inbounds are retained. Port conflicts with `80`, `1080`, REDIR, or TPROXY must be fixed in the subscription template.
 
-Теги управляемых контейнером inbounds стабильны и зарезервированы:
+Container-managed inbound tags are stable and reserved:
 
-| Тег | Где используется |
+| Tag | Used by |
 |---|---|
-| `xray-remnasub-mixed` | mixed inbound во всех режимах |
-| `xray-remnasub-tproxy` | общий TCP/UDP inbound в режиме `tproxy` |
-| `xray-remnasub-tcp` | TCP REDIR в режимах `redir-tproxy` и `redir-tun` |
-| `xray-remnasub-udp` | UDP TPROXY в режиме `redir-tproxy` |
-| `xray-remnasub-tun` | TUN в режиме `redir-tun` |
+| `xray-remnasub-mixed` | mixed inbound in every mode |
+| `xray-remnasub-tproxy` | combined TCP/UDP inbound in `tproxy` mode |
+| `xray-remnasub-tcp` | TCP REDIR in `redir-tproxy` and `redir-tun` modes |
+| `xray-remnasub-udp` | UDP TPROXY in `redir-tproxy` mode |
+| `xray-remnasub-tun` | TUN in `redir-tun` mode |
 
-Контейнер не переписывает `routing.rules[].inboundTag`. Правила без `inboundTag` продолжают применяться ко всем входам. Правило с тегом исходного inbound остаётся привязанным только к нему; для трафика RouterOS укажите нужные теги из таблицы в шаблоне подписки. Исходный inbound с зарезервированным тегом отклоняется, чтобы поздний `confdir`-файл не заменил его молча.
+The container does not rewrite `routing.rules[].inboundTag`. Rules without `inboundTag` continue to apply to every inbound. A rule containing a source inbound tag remains scoped to that source inbound; list the required tags from the table in the subscription template to target RouterOS traffic. A source inbound using a reserved tag is rejected so that a later `confdir` fragment cannot replace it silently.
 
-Пустой авторитетный ответ, HTTP `401/403/404/410/451` и явное ограничение HWID отключают активный runtime. Старые credentials в этом случае не продолжают работать. Ошибка сети, timeout, `5xx`, повреждённый JSON или невалидный Xray-конфиг сохраняют последнюю рабочую версию.
+An authoritative empty response, HTTP `401/403/404/410/451`, or an explicit HWID restriction disables the active runtime. Transport errors, timeouts, `5xx`, malformed JSON, and invalid Xray configurations retain the last-good version.
 
-## Geodata
+## ♻️ Core Restarts
 
-Если выбранный JSON уже содержит `geodata`, его `cron`, `assets` и `outbound` сохраняются. Если секции нет, контейнер добавляет:
+A scheduled refresh that returns the same subscription does not restart Xray. Before publishing a candidate the container compares it with the running version: the subscription fragment, the container's own fragments, the configuration set, the listener metadata, the source digest, and the geodata asset key. When all of them match, the candidate is discarded, `configuration unchanged` is written to the event log, and established connections survive.
 
-```json
-{
-  "geodata": {
-    "cron": "0 4 * * *",
-    "assets": [
-      {
-        "url": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat",
-        "file": "geoip.dat"
-      },
-      {
-        "url": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat",
-        "file": "geosite.dat"
-      }
-    ],
-    "outbound": "direct"
-  }
-}
-```
+The comparison covers the whole subscription response, so a provider changing an item you have not selected still counts as a change and does restart the core.
 
-Если тег `direct` уже занят не-`freedom` outbound или отсутствует, контейнер безопасно использует существующий tagged `freedom` либо добавляет отдельный служебный `freedom` в конец списка. Исходные outbounds и их порядок не меняются.
+## 🌍 Geodata
 
-### Кто и когда скачивает файлы
+Xray refreshes geodata itself. Its built-in scheduler honours `geodata.cron`, downloads through `geodata.outbound`, replaces the files transactionally, and hot-reloads them without a restart. The container does not touch an asset set that a running core owns.
 
-Расписание принадлежит Xray, bootstrap — контейнеру, и граница между ними проходит ровно в одном месте.
+What the container does own is the gap Xray leaves: if an asset file does not exist when the core starts, Xray neither downloads nor creates it — it simply fails to parse the configuration. So the container bootstraps missing assets before `xray run -test`, and only that. An existing file is never re-downloaded and never even touched.
 
-Xray обновляет geodata сам: `app/geodata` заводит планировщик по вашему `cron`, скачивает файлы **через собственный outbound** (то есть через прокси), атомарно подменяет их и перечитывает геобазы в памяти. Перезапуск ядра для этого не нужен и не делается.
+When the selected JSON already has `geodata`, its cron, assets and outbound are preserved. Otherwise the container adds the Loyalsoldier `geoip.dat` and `geosite.dat` releases with schedule `0 4 * * *` and outbound `direct`. If `direct` is unavailable or belongs to a non-`freedom` outbound, a tagged `freedom` is reused or a dedicated helper is appended without changing the original outbound order.
 
-Но при старте ядро не скачивает ничего. Хуже того, `infra/conf/geodata.go` вызывает `StatAsset` на каждый объявленный файл при разборе конфигурации, поэтому отсутствующий ассет не просто не скачивается — он роняет разбор, и Xray не проходит даже `xray run -test`. Это и есть единственная причина, по которой контейнер вообще трогает эти файлы: он скачивает **только недостающие** и только перед стартом. Если обязательный файл получить нельзя, новая конфигурация не активируется.
+Loyalsoldier URLs are verified against their adjacent `.sha256sum` files. Custom assets must use HTTPS, a safe relative path, and stay under 128 MiB per file.
 
-Уже лежащий файл контейнер не перекачивает и не трогает его `mtime`: соревноваться с ядром за один и тот же файл незачем, а лишняя запись в хранилище противоречит всему остальному устройству контейнера.
-
-По той же причине содержимое файлов geodata не участвует в сравнении «изменилась ли конфигурация»: первое же обновление, сделанное самим Xray, выглядело бы как изменение и вызывало бы перезапуск. Значение имеет только состав набора ассетов.
-
-### Куда именно пишутся обновления
-
-`common/platform.GetAssetLocation` ищет файл сначала в `xray.location.asset`, а затем в `/usr/local/share/xray`, `/usr/share/xray` и `/opt/share/xray`. Загрузчик ядра пишет обновление туда, куда разрешился путь. Контейнер задаёт `xray.location.asset` в оверлее и в переменной окружения и гарантирует наличие файлов в выбранном каталоге, поэтому выигрывает всегда он. Если в системном пути обнаружится посторонняя копия — например, смонтированная снаружи, — панель покажет предупреждение: иначе обновления молча ушли бы мимо выбранного хранилища.
-
-Для точных URL Loyalsoldier проверяются соседние `.sha256sum`. Пользовательские assets должны использовать HTTPS, безопасный относительный путь и размер не более 128 MiB на файл.
-
-Доступны два режима хранения:
-
-| Режим | Каталог | Поведение |
+| Storage | Directory | Behaviour |
 |---|---|---|
-| `memory` | `/dev/shm/xray-remnasub/geodata/<hash>` | По умолчанию. Не пишет большие файлы на накопитель; после перезапуска контейнера файлы исчезают и скачиваются заново. |
-| `persistent` | `/etc/xray/remnasub/geodata/<hash>` | Файлы остаются на подключённом накопителе и переживают перезапуск контейнера. |
+| `memory` | `/dev/shm/xray-remnasub/geodata/<hash>` | Default. Avoids large flash writes; assets disappear on container restart and are bootstrapped again. |
+| `persistent` | `/etc/xray/remnasub/geodata/<hash>` | Keeps assets on the mounted drive across restarts. |
 
-Умолчание намеренно такое. Флешка на роутере — это обычно 128 МБ, а при установке на внутреннюю память запас ещё меньше, поэтому регулярно перезаписываемые двадцать мегабайт по умолчанию живут в оперативной памяти. Переключение на накопитель остаётся вашим осознанным выбором, а не решением контейнера.
+Memory is the default on purpose. Router flash is typically small, and roughly 20 MB of geodata rewritten on every update is a poor trade for it, so writing to disk stays a deliberate choice.
 
-Пока набор используется работающим Xray или HTTP-проверкой, задания контейнера его не изменяют: единственным писателем активного набора остаётся сам Xray.
+The asset directory is pinned with `xray.location.asset` and an explicit `geodata.assets[].path`, so Xray reads exactly the managed files. If the same asset name also exists in `/usr/local/share/xray`, `/usr/share/xray`, or `/opt/share/xray`, the container reports a warning rather than letting the shadowed copy pass unnoticed.
 
-## Проверка конфигураций
+## 🩺 Health Checks
 
-Кнопка проверки выполняет реальный HTTP-запрос через outbound выбранного полного JSON, а не TCP connect к адресу сервера.
+Health checks perform an HTTP request through the real outbound rather than a TCP connect to the server address. Parameters are selected in this order:
 
-Приоритет параметров:
+1. matching `burstObservatory.pingConfig`;
+2. matching `observatory`;
+3. the URL, timeout, and method configured in the container UI.
 
-1. подходящий `burstObservatory.pingConfig`;
-2. подходящий `observatory`;
-3. URL, timeout и метод из настроек контейнера.
+A short-lived isolated Xray keeps the full outbound array, so `sockopt.dialerProxy`, `proxySettings.tag`, and related dependencies continue to work. Check-all runs sequentially to limit RouterOS load.
 
-Для проверки запускается короткоживущий изолированный Xray с полным массивом outbounds, поэтому сохраняются `sockopt.dialerProxy`, `proxySettings.tag` и другие зависимости. Проверка всех строк выполняется последовательно, чтобы не создавать пиковую нагрузку на роутер.
+## 🔀 Interception Modes
 
-## Сетевые режимы
-
-| Режим | TCP | UDP | Backend |
+| Mode | TCP | UDP | Backend |
 |---|---|---|---|
-| `auto` | REDIR | TPROXY при поддержке, иначе TUN | определяется проверкой возможностей ядра |
+| `auto` | REDIR | TPROXY when supported, otherwise TUN | kernel capability probe |
 | `redir-tproxy` | REDIR `12345` | TPROXY `12346` | nftables |
 | `tproxy` | TPROXY `12346` | TPROXY `12346` | nftables |
-| `redir-tun` | REDIR `12345` | TUN `Xray` | nftables либо iptables-legacy |
+| `redir-tun` | REDIR `12345` | `Xray` TUN | nftables or iptables-legacy |
 
-Если nftables доступен, но ядро не поддерживает TPROXY, на `amd64` и `arm64` используется nftables с REDIR + TUN. На ядре без nftables, а также на `arm/v7` и `arm/v5`, используется iptables-legacy. Контейнер удаляет только собственные таблицы/цепочки и не выполняет `nft flush ruleset` или очистку базовых iptables chains.
+If nftables is available but kernel TPROXY support is missing, `amd64` and `arm64` use nftables with REDIR + TUN. Kernels without nftables, plus `armv7` and `armv5`, use iptables-legacy. Cleanup only removes container-owned tables, chains, routes, and policy rules.
 
-При старте Alpine нормализует стандартные policy rules:
+MPTCP cannot be intercepted, so both backends drop TCP option 30 on the LAN interface and clients fall back to plain TCP. nftables does this in its own chain; iptables uses `mangle` `PREROUTING`, because `DROP` is not allowed in the `nat` table.
 
-```text
-0:      from all lookup local
-32766:  from all lookup main
-32767:  from all lookup default
+Alpine normalizes the standard rules to `local=0`, `main=32766`, and `default=32767`. TPROXY adds `fwmark 1` in table `100` at priority `100`. TUN uses table `110` and priorities `10000..10005`.
+
+## 💾 Storage
+
+`/etc/xray/remnasub` contains profiles, source subscriptions, response metadata, and — only when explicitly enabled — persistent geodata. Everything generated at runtime lives in `/dev/shm/xray-remnasub`: confdirs, status, jobs, events, logs, and memory geodata. That split is deliberate: the router's flash is small, and the container is built to leave it alone unless the user opts in.
+
+## 🛡 Security
+
+Subscription files contain credentials. Keep `/etc/xray` private, retain Basic Auth on untrusted networks, and use a unique long password. The container does not add or expose an Xray API itself; API and inbound sections supplied by the selected full JSON are retained, so control the subscription template.
+
+## 🩻 Diagnostics
+
+```sh
+cat /dev/shm/xray-remnasub/events.log
+cat /dev/shm/xray-remnasub/network.log
+ip rule show
+ip route show table 100
+ip route show table 110
+nft list tables
 ```
 
-TPROXY добавляет `fwmark 1` в таблицу `100` с priority `100`. TUN использует таблицу `110` и rules `10000..10005`. При остановке Xray эти правила и собственные firewall objects удаляются.
-
-## RouterOS
-
-Пример ниже использует синтаксис `mountlists` и `envlists` из RouterOS 7.21+. На новом роутере сначала включите контейнеры в device mode:
-
-```routeros
-/system/device-mode/print
-/system/device-mode/update mode=advanced container=yes
-```
-
-Пример адресации:
-
-```routeros
-/interface/veth/add name=XrayRemnaSub address=192.168.255.14/30 gateway=192.168.255.13
-/ip/address/add address=192.168.255.13/30 interface=XrayRemnaSub
-/container/mounts/add list=xray-remnasub-ros src=usb1/xray-remnasub dst=/etc/xray
-/container/envs/add list=xray-remnasub-ros key=BASIC_AUTH_USER value=admin
-/container/envs/add list=xray-remnasub-ros key=BASIC_AUTH_HASH value="\$1\$salt\$replace-with-your-digest"
-```
-
-Контейнер из registry:
-
-```routeros
-/container/config/set registry-url=https://ghcr.io tmpdir=usb1/pull
-/container/add remote-image=ghcr.io/medium1992/xray-remnasub-ros:latest interface=XrayRemnaSub root-dir=usb1/xray-remnasub-root mountlists=xray-remnasub-ros envlists=xray-remnasub-ros logging=yes start-on-boot=yes comment=XrayRemnaSub
-```
-
-Маршрут с проверкой готовности контейнера:
-
-```routeros
-/routing/table/add name=XrayRemnaSub fib
-/ip/route/add dst-address=0.0.0.0/0 gateway=192.168.255.14 routing-table=XrayRemnaSub check-gateway=ping comment=XrayRemnaSub
-/routing/rule/add src-address=192.168.88.100/32 action=lookup-only-in-table table=XrayRemnaSub comment="XrayRemnaSub client"
-```
-
-Контейнер блокирует ICMP echo к своему gateway до успешного запуска Xray и установки правил. Поэтому `check-gateway=ping` отключает маршрут в состоянии fail-closed.
-
-Веб-панель доступна по `http://192.168.255.14/`.
-
-## Docker
-
-```bash
-docker run -d \
-  --name xray-remnasub-ros \
-  --restart unless-stopped \
-  --cap-add NET_ADMIN \
-  --device /dev/net/tun \
-  -p 8080:80 \
-  -v ./xray-remnasub:/etc/xray \
-  -e BASIC_AUTH_USER=admin \
-  -e BASIC_AUTH_HASH='$1$replace$the-generated-hash' \
-  ghcr.io/medium1992/xray-remnasub-ros:latest
-```
-
-Хеш создаётся командой:
-
-```bash
-openssl passwd -1 'replace-with-a-long-password'
-```
-
-Либо во вкладке «Доступ» самой панели — она сгенерирует sha512crypt, который
-надёжнее md5crypt из `openssl passwd -1`.
-
-Если `BASIC_AUTH_HASH` не задан, контейнер не поднимает панель с общим для всех
-паролем: он генерирует случайный пароль на каждый старт и печатает его в
-журнал контейнера (`/log/print` в RouterOS, `docker logs` локально). Пароль
-меняется при каждом перезапуске, поэтому для постоянной установки задайте
-`BASIC_AUTH_HASH`.
-
-Для локальной проверки mixed inbound можно дополнительно опубликовать `1080/tcp`.
-
-## Сборка и TAR для RouterOS
+## 🐳 Build
 
 ```bash
 docker buildx build \
@@ -239,7 +213,7 @@ docker buildx build \
   --load .
 ```
 
-Новые версии Docker с containerd image store могут экспортировать OCI layout, который старые RouterOS не распознают. Для самого совместимого ручного импорта нужен legacy `docker-archive`, например через Skopeo:
+Docker versions using the containerd image store may export an OCI layout that older RouterOS releases cannot import. Convert it to a legacy `docker-archive`:
 
 ```bash
 skopeo copy --format v2s2 \
@@ -248,39 +222,6 @@ skopeo copy --format v2s2 \
 gzip -9 xray-remnasub-ros-v26.7.28-arm64.tar
 ```
 
-Корректный архив содержит `manifest.json`, `repositories` и `*/layer.tar`, а не `oci-layout` и `blobs/sha256/*`.
+A compatible archive contains `manifest.json`, `repositories`, and `*/layer.tar`, not `oci-layout` and `blobs/sha256/*`.
 
-## Хранение и безопасность
-
-В `/etc/xray/remnasub` хранятся профили, исходные подписки, response metadata и persistent geodata. Рабочие confdir, статусы, логи и memory geodata находятся в `/dev/shm/xray-remnasub`.
-
-### Память
-
-`/dev/shm` в контейнере — это половина оперативной памяти роутера. При хранилище geodata в памяти туда ложатся `geoip.dat` и `geosite.dat` (около 20 МБ вместе), а сам Xray с загруженными геобазами занимает ещё 40–80 МБ. На устройствах с 256 МБ (`hEX refresh`, `hAP ac²`) запас получается тонким: если к контейнеру примонтирован накопитель, переключите geodata на постоянное хранилище. Кнопка «Проверить все» в списке конфигураций поднимает второй экземпляр Xray рядом с работающим — на таких устройствах проверяйте конфигурации по одной.
-
-### Время
-
-Расписание обновления geodata (`geodata.cron`, по умолчанию `0 4 * * *`) считается по локальному времени контейнера. Переменная `TZ` не выставляется, поэтому без неё это 04:00 UTC. Добавьте `TZ` в `envlist`, если хотите привязать обновление к своему часовому поясу.
-
-### Пароль
-
-Генератор хеша во вкладке «Доступ» отдаёт `sha512crypt`, когда busybox в образе его поддерживает, и `md5crypt` в противном случае; какой алгоритм использован, написано рядом с полем. Проверяет хеш тот же busybox, который его сгенерировал, поэтому несовместимости быть не может.
-
-Подписки содержат ключи доступа. Не публикуйте `/etc/xray`, не отключайте Basic Auth на доступном извне интерфейсе и используйте отдельный длинный пароль. Контейнер сам не добавляет и не публикует Xray API; при этом пользовательские API/inbounds из полного JSON сохраняются, поэтому контролируйте шаблон подписки.
-
-## Диагностика
-
-Веб-панель показывает HTTP status, размер ответа, этап задания, вывод `xray run -test`, last-good состояние, ограничения HWID, geodata и последние события.
-
-Внутри контейнера полезны:
-
-```sh
-cat /dev/shm/xray-remnasub/events.log
-cat /dev/shm/xray-remnasub/network.log
-ip rule show
-ip route show table 100
-ip route show table 110
-nft list tables
-```
-
-Если отсутствующий geodata asset не скачался, Xray не запускается. При memory storage это также означает, что после каждого перезапуска контейнеру нужен доступ к URL assets.
+`armv5` has no Alpine base image, so that platform builds from `scratch` plus the Buildroot `rootfs.tar` tracked in this repository.

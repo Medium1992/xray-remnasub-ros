@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#181b17">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta name="referrer" content="same-origin">
+  <title>RemnaSub Xray RoS</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/style.css">
+  <script src="assets/theme.js"></script>
+</head>
+<body>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12.8 2.5 8.1 4.4a1.2 1.2 0 0 1 0 2.1l-8.1 4.4a1.7 1.7 0 0 1-1.6 0L3.1 9a1.2 1.2 0 0 1 0-2.1l8.1-4.4a1.7 1.7 0 0 1 1.6 0Z"/><path d="m3.7 12.8 7.5 4.1a1.7 1.7 0 0 0 1.6 0l7.5-4.1M3.7 17l7.5 4.1a1.7 1.7 0 0 0 1.6 0l7.5-4.1"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m7 8 4 4-4 4M13 16h4"/><rect width="18" height="16" x="3" y="4" rx="2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.2a2 2 0 0 1-2 0L6.2 6a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.8v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.2a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.2a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.8l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.2a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></symbol>
+    <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18l-6-4-6 4Z"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.5 2.2 18a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3L13.7 3.5a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect width="16" height="11" x="4" y="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.7"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="6" rx="1"/><rect x="14" y="15" width="7" height="6" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/><path d="M6.5 9v3h11v3M6.5 12v3"/></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 21a9 9 0 1 1 9-9c0 1.7-1.3 3-3 3h-1.5a2.5 2.5 0 0 0-1.8 4.2A1.9 1.9 0 0 1 12 21Z"/><circle cx="7.5" cy="12" r="1"/><circle cx="9.5" cy="8" r="1"/><circle cx="14.5" cy="8" r="1"/><circle cx="17" cy="11.5" r="1"/></symbol>
+  </svg>
+
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-icon">R</span><span><b>RemnaSub Xray</b><small>RoS</small></span></div>
+      <nav class="main-nav" aria-label="Разделы">
+        <button class="active" type="button" data-page-link="subscriptions"><svg><use href="#i-layers"/></svg><span>Подписки</span><em id="nav-profile-count">0</em></button>
+        <button type="button" data-page-link="settings"><svg><use href="#i-settings"/></svg><span>Настройки</span></button>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <section class="sidebar-core">
+        <div><i id="sidebar-core-dot"></i><strong id="sidebar-core-title">Xray остановлен</strong></div>
+        <p id="sidebar-active-profile">Профиль не выбран</p>
+      </section>
+    </aside>
+
+    <main class="main">
+      <section class="page active" data-page="subscriptions">
+        <header class="control-bar">
+          <div><h1>Подписки</h1><p id="subscriptions-subtitle">0 профилей</p></div>
+          <div class="control-actions">
+            <button class="secondary-button runtime-header-button" type="button" id="open-active-runtime" disabled title="Конфигурация запуска Xray"><svg><use href="#i-file"/></svg><span>Конфигурация запуска</span></button>
+            <button class="secondary-button runtime-header-button" type="button" id="open-runtime-events" title="События контейнера"><svg><use href="#i-terminal"/></svg><span>События</span></button>
+            <button class="primary-button" type="button" id="add-profile"><svg><use href="#i-plus"/></svg><span>Добавить</span></button>
+          </div>
+        </header>
+        <div class="page-scroll">
+          <div class="content subscriptions-content">
+            <div class="subscription-list" id="subscription-list"></div>
+            <section class="empty-state hidden" id="subscription-empty">
+              <span><svg><use href="#i-layers"/></svg></span>
+              <h2>Подписок пока нет</h2>
+              <p>Добавьте JSON-подписку Remnawave для Xray.</p>
+              <button class="primary-button" type="button" id="empty-add-profile"><svg><use href="#i-plus"/></svg>Добавить подписку</button>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="page" data-page="settings">
+        <header class="control-bar"><div><h1>Настройки</h1><p>Параметры контейнера</p></div><button class="primary-button" type="submit" form="settings-form" id="save-settings"><svg><use href="#i-check"/></svg><span>Сохранить</span></button></header>
+        <nav class="settings-tabs" aria-label="Разделы настроек">
+          <div>
+            <button class="active" type="button" data-settings-tab="requests"><svg><use href="#i-link"/></svg><span>Заголовки</span></button>
+            <button type="button" data-settings-tab="traffic"><svg><use href="#i-layers"/></svg><span>Входящий трафик</span></button>
+            <button type="button" data-settings-tab="network"><svg><use href="#i-network"/></svg><span>Сеть Alpine</span></button>
+            <button type="button" data-settings-tab="xray"><svg><use href="#i-terminal"/></svg><span>Ядро Xray</span></button>
+            <button type="button" data-settings-tab="geodata"><svg><use href="#i-database"/></svg><span>Geodata</span></button>
+            <button type="button" data-settings-tab="appearance"><svg><use href="#i-palette"/></svg><span>Оформление</span></button>
+            <button type="button" data-settings-tab="access"><svg><use href="#i-lock"/></svg><span>Доступ</span></button>
+          </div>
+        </nav>
+        <div class="page-scroll">
+          <form class="content narrow settings-form" id="settings-form">
+            <section class="settings-section settings-panel active" data-settings-panel="requests">
+              <div class="settings-title"><h2>Заголовки Remnawave</h2><p>Используются по умолчанию при загрузке каждой подписки</p></div>
+              <div class="settings-grid header-editor">
+                <div class="header-editor-intro"><span><b>HTTP-заголовки</b><small>Обязательные ключи всегда отправляются. Заголовки отдельного профиля имеют приоритет.</small></span><button class="secondary-button" type="button" id="add-global-header"><svg><use href="#i-plus"/></svg>Добавить заголовок</button></div>
+                <div class="header-columns" aria-hidden="true"><span>Ключ</span><span>Значение</span><span></span></div>
+                <div class="header-rows" id="global-header-rows"></div>
+              </div>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="traffic">
+              <div class="settings-title"><h2>Режим входящего трафика</h2><p>Определяет inbounds Xray и правила перехвата внутри контейнера</p></div>
+              <aside class="settings-callout"><svg><use href="#i-alert"/></svg><div><b>Перехват создаётся контейнером</b><p>Полный выбранный JSON хранится отдельно без изменений. Xray запускается через confdir с локальными входами RouterOS, настройкой журнала и geodata bootstrap.</p></div></aside>
+              <div class="settings-grid mode-list">
+                <label class="setting-row radio-row"><span><b>Автоматически</b><small id="auto-mode-description">Выбор по доступному firewall backend</small></span><input type="radio" name="listener-mode" value="auto"></label>
+                <label class="setting-row radio-row"><span><b>REDIR + TUN</b><small>TCP redirect, UDP через TUN</small></span><input type="radio" name="listener-mode" value="redir-tun"></label>
+                <label class="setting-row radio-row"><span><b>REDIR + TPROXY</b><small>TCP redirect, UDP через TPROXY</small></span><input type="radio" name="listener-mode" value="redir-tproxy"></label>
+                <label class="setting-row radio-row"><span><b>TPROXY</b><small>TCP и UDP через TPROXY</small></span><input type="radio" name="listener-mode" value="tproxy"></label>
+                <div class="compound-setting listener-ports"><div class="field-grid two">
+                  <label data-port-field="redir"><span>Порт REDIR</span><input id="redir-port" type="number" min="1" max="65535" required></label>
+                  <label data-port-field="tproxy"><span>Порт TPROXY</span><input id="tproxy-port" type="number" min="1" max="65535" required></label>
+                </div></div>
+              </div>
+              <p class="settings-note" id="listener-mode-note"></p>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="network">
+              <div class="settings-title"><h2>Сеть Alpine</h2><p>Сетевой стек контейнера до запуска Xray</p></div>
+              <div class="settings-grid">
+                <div class="setting-row"><span><b>Firewall backend</b><small>Определяется непосредственно внутри контейнера</small></span><strong id="network-firewall-backend">Определяется...</strong></div>
+                <div class="setting-row"><span><b>Интерфейс RouterOS</b><small>Определяется по default route контейнера</small></span><strong id="network-active-interface">Определяется...</strong></div>
+                <label class="setting-row setting-select-row"><span><b>Очередь интерфейса</b><small>Доступность qdisc зависит от ядра RouterOS</small></span><select id="network-qdisc"><option value="fq_codel">fq_codel</option><option value="cake">cake</option><option value="codel">codel</option><option value="sfq">sfq</option><option value="pfifo">pfifo</option><option value="bfifo">bfifo</option><option value="system">Системная</option></select></label>
+                <label class="setting-row switch-row"><span><b>IPv6</b><small>Разрешить IPv6 для интерфейсов контейнера</small></span><input id="network-ipv6" type="checkbox"><i></i></label>
+                <div class="setting-row"><span><b>Политики маршрутизации</b><small>Таблицы и ip rule создаются только для выбранного режима перехвата</small></span><strong>Автоматически</strong></div>
+                <label class="setting-row switch-row"><span><b>Multicast</b><small>Разрешить multicast внутри контейнера</small></span><input id="network-multicast" type="checkbox"><i></i></label>
+              </div>
+              <details class="collapse-block network-advanced">
+                <summary>Таймауты conntrack, сек.<svg><use href="#i-chevron"/></svg></summary>
+                <div class="network-timeout-grid">
+                  <label><span>TCP established</span><input id="network-ct-established" type="number" min="1" max="604800"></label>
+                  <label><span>TCP unacknowledged</span><input id="network-ct-unacknowledged" type="number" min="1" max="604800"></label>
+                  <label><span>TCP SYN sent</span><input id="network-ct-syn-sent" type="number" min="1" max="604800"></label>
+                  <label><span>TCP SYN recv</span><input id="network-ct-syn-recv" type="number" min="1" max="604800"></label>
+                  <label><span>TCP FIN wait</span><input id="network-ct-fin-wait" type="number" min="1" max="604800"></label>
+                  <label><span>TCP close wait</span><input id="network-ct-close-wait" type="number" min="1" max="604800"></label>
+                  <label><span>TCP last ACK</span><input id="network-ct-last-ack" type="number" min="1" max="604800"></label>
+                  <label><span>TCP time wait</span><input id="network-ct-time-wait" type="number" min="1" max="604800"></label>
+                  <label><span>TCP close</span><input id="network-ct-close" type="number" min="1" max="604800"></label>
+                  <label><span>UDP stream</span><input id="network-ct-udp-stream" type="number" min="1" max="604800"></label>
+                </div>
+              </details>
+              <p class="settings-note">Сетевые правила принадлежат контейнеру и удаляются при остановке Xray.</p>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="xray">
+              <div class="settings-title"><h2>Ядро Xray</h2><p>Минимальные параметры контейнерного запуска</p></div>
+              <div class="settings-grid">
+                <div class="setting-row"><span><b>Версия ядра</b><small>Версия бинарного файла внутри образа</small></span><strong id="xray-version">Xray</strong></div>
+                <label class="setting-row setting-select-row"><span><b>Уровень журнала</b><small>Контейнерный loglevel поверх выбранной конфигурации</small></span><select id="xray-log-level"><option value="none">none</option><option value="error">error</option><option value="warning">warning</option><option value="info">info</option><option value="debug">debug</option></select></label>
+                <label class="setting-row switch-row"><span><b>Sniffing</b><small>Определять домен назначения по содержимому соединения</small></span><input id="xray-sniffing-enabled" type="checkbox"><i></i></label>
+                <label class="setting-row switch-row"><span><b>Только маршрутизация</b><small>Не подменять адрес назначения после sniffing</small></span><input id="xray-sniffing-route-only" type="checkbox"><i></i></label>
+                <label class="text-setting compact"><span><b>URL HTTP-проверки</b><small>Резервный адрес, если его не задаёт подходящий observatory или burstObservatory</small></span><input id="xray-probe-url" type="url" maxlength="2048" value="https://www.gstatic.com/generate_204" required></label>
+                <label class="text-setting compact"><span><b>Таймаут HTTP-проверки</b><small>Резерв для конфигураций без observatory и для burstObservatory без timeout</small></span><input id="xray-probe-timeout-seconds" type="number" min="1" max="30" step="1" value="5" required></label>
+                <label class="setting-row setting-select-row"><span><b>Метод HTTP-проверки</b><small>Резерв для конфигураций без observatory и для burstObservatory без метода</small></span><select id="xray-probe-http-method"><option value="HEAD">HEAD</option><option value="GET">GET</option></select></label>
+              </div>
+              <aside class="settings-callout xray-runtime-callout"><svg><use href="#i-terminal"/></svg><div><b>Исходная конфигурация сохраняется</b><p>Выбранный полный JSON остаётся отдельным файлом без изменений. Рядом создаются локальные фрагменты входящего трафика RouterOS, уровня журнала и geodata, необходимые контейнеру.</p></div></aside>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="geodata">
+              <div class="settings-title"><h2>Файлы Geodata</h2><p>Хранилище GeoIP и GeoSite для выбранной конфигурации</p></div>
+              <aside class="settings-callout"><svg><use href="#i-database"/></svg><div><b>Обновляет файлы само ядро</b><p>Параметры <code>geodata</code> выбранного полного JSON сохраняются; если раздела нет, применяются <code>geoip.dat</code> и <code>geosite.dat</code> от Loyalsoldier. Xray скачивает свежие версии сам по своему <code>cron</code>, через собственный outbound, и перечитывает их без перезапуска. Контейнер только создаёт недостающие файлы перед стартом: без них ядро не принимает конфигурацию.</p></div></aside>
+              <div class="settings-grid mode-list">
+                <label class="setting-row radio-row"><span><b>Оперативная память</b><small><code>/dev/shm/xray-remnasub/geodata</code>, без записи больших файлов на накопитель</small></span><input type="radio" name="geodata-storage" value="memory" checked></label>
+                <label class="setting-row radio-row"><span><b>Постоянное хранилище</b><small><code>/etc/xray/remnasub/geodata</code> на подключённом накопителе, файлы сохраняются после перезапуска</small></span><input type="radio" name="geodata-storage" value="persistent"></label>
+              </div>
+              <aside class="settings-callout warning-callout geodata-memory-warning" id="geodata-memory-warning"><svg><use href="#i-alert"/></svg><div><b>Geodata хранится в оперативной памяти</b><p>Файлы в <code>/dev/shm</code> исчезнут при перезапуске контейнера и будут скачаны заново до проверки конфигурации и запуска Xray.</p></div></aside>
+              <div class="settings-title override-subtitle"><h2>Состояние файлов</h2><p>Данные активного хранилища</p></div>
+              <div class="settings-grid">
+                <div class="setting-row"><span><b>Активный каталог</b><small>Путь последней применённой конфигурации Xray</small></span><strong class="geodata-status-value" id="geodata-asset-dir">/dev/shm/xray-remnasub/geodata</strong></div>
+                <div class="setting-row"><span><b>Файлы</b><small>Подготовленные ресурсы geodata</small></span><strong id="geodata-asset-count">Нет данных</strong></div>
+                <div class="setting-row"><span><b>Размер</b><small>Объём подготовленных файлов</small></span><strong id="geodata-total-bytes">Нет данных</strong></div>
+                <div class="setting-row"><span><b>Последнее обновление</b><small>Время файлов на диске, включая обновления самого Xray</small></span><strong id="geodata-last-update">Ещё не загружались</strong></div>
+              </div>
+              <aside class="settings-callout warning-callout geodata-api-warning hidden" id="geodata-api-warning"><svg><use href="#i-alert"/></svg><div><b>Geodata требует внимания</b><p id="geodata-warning-text"></p></div></aside>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="appearance">
+              <div class="settings-title"><h2>Тема панели</h2><p>Сохраняется в контейнере и применяется на всех устройствах</p></div>
+              <div class="theme-grid" id="theme-grid" role="radiogroup" aria-label="Тема панели"></div>
+              <div class="settings-grid">
+                <div class="setting-row accent-row"><span><b>Акцентный цвет</b><small>Пустое значение — родной цвет выбранной темы</small></span><span class="accent-controls"><span class="accent-presets" id="accent-presets"></span><input id="accent-color" type="color" aria-label="Свой акцентный цвет"><button class="secondary-button" type="button" id="accent-reset">Сбросить</button></span></div>
+              </div>
+              <p class="settings-note">Изменения видно сразу, но они сохранятся только после нажатия «Сохранить».</p>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="access">
+              <div class="settings-title"><h2>Пароль веб-панели</h2><p>Генератор crypt-хеша для переменной BASIC_AUTH_HASH</p></div>
+              <aside class="settings-callout"><svg><use href="#i-lock"/></svg><div><b>По умолчанию: admin / admin</b><p>Открытый пароль не сохраняется. Добавьте полученный хеш в ENV <code>BASIC_AUTH_HASH</code> и перезапустите контейнер. Логин задаётся через <code>BASIC_AUTH_USER</code>.</p></div></aside>
+              <div class="settings-grid password-generator">
+                <label class="text-setting compact"><span><b>Новый пароль</b><small>От 8 до 128 символов</small></span><span class="password-field"><input id="basic-auth-password" type="password" maxlength="128" autocomplete="new-password"><button class="icon-button" type="button" data-toggle-password="basic-auth-password" title="Показать пароль"><svg><use href="#i-eye"/></svg></button></span></label>
+                <label class="text-setting compact"><span><b>Повторите пароль</b><small>Защищает от случайной опечатки</small></span><span class="password-field"><input id="basic-auth-password-confirm" type="password" maxlength="128" autocomplete="new-password"><button class="icon-button" type="button" data-toggle-password="basic-auth-password-confirm" title="Показать пароль"><svg><use href="#i-eye"/></svg></button></span></label>
+                <div class="password-generator-action"><button class="primary-button" type="button" id="generate-basic-auth-hash"><svg><use href="#i-lock"/></svg>Создать хеш</button></div>
+                <div class="password-hash-result hidden" id="basic-auth-hash-result"><span><b>BASIC_AUTH_HASH</b><small id="basic-auth-hash-algorithm">Значение для переменной окружения контейнера</small></span><span class="copy-field"><input id="basic-auth-hash" type="text" readonly spellcheck="false"><button class="icon-button" type="button" id="copy-basic-auth-hash" title="Копировать хеш"><svg><use href="#i-copy"/></svg></button></span></div>
+              </div>
+              <p class="settings-note security-warning">Панель использует HTTP Basic Auth. Не публикуйте её порт напрямую в интернет.</p>
+            </section>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <nav class="mobile-nav" aria-label="Разделы">
+    <button class="active" type="button" data-page-link="subscriptions"><svg><use href="#i-layers"/></svg><span>Подписки</span></button>
+    <button type="button" data-page-link="settings"><svg><use href="#i-settings"/></svg><span>Настройки</span></button>
+  </nav>
+
+  <div class="modal-layer hidden" id="profile-modal-layer">
+    <section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+      <header class="modal-header"><div><h2 id="editor-title">Новая подписка</h2><p>Настройки профиля Xray</p></div><button class="round-button" type="button" id="close-editor" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
+      <form id="profile-form" class="modal-scroll">
+        <input id="profile-id" type="hidden">
+        <div class="settings-grid editor-grid">
+          <label class="text-setting compact"><span><b>Название</b></span><input id="profile-name" type="text" maxlength="80" autocomplete="off" required></label>
+          <label class="text-setting compact"><span><b>URL JSON-подписки</b><small>Массив конфигураций Xray от Remnawave</small></span><input id="profile-url" type="url" inputmode="url" autocomplete="off" placeholder="https://panel.example/sub/..." required></label>
+          <div class="compound-setting"><div class="field-grid two"><label><span>Обновление, мин.</span><input id="profile-refresh" type="number" min="1" max="10080" step="1" required></label><label><span>Таймаут, сек.</span><input id="profile-timeout" type="number" min="3" max="120" required></label></div></div>
+          <label class="setting-row switch-row"><span><b>Название от сервера</b><small>Использовать profile-title из ответа подписки</small></span><input id="profile-use-provider-title" type="checkbox"><i></i></label>
+          <label class="setting-row switch-row"><span><b>Интервал от сервера</b><small>Использовать profile-update-interval вместо резервного значения</small></span><input id="profile-use-provider-interval" type="checkbox"><i></i></label>
+          <label class="setting-row switch-row"><span><b>Недоверенный TLS</b><small>Только для известного источника подписки</small></span><input id="profile-insecure" type="checkbox"><i></i></label>
+        </div>
+
+        <section class="profile-provider hidden" id="profile-provider-meta">
+          <div class="profile-provider-head"><span><b>Данные подписки</b><small>Заголовки ответа Remnawave</small></span><strong id="profile-provider-title">Профиль</strong></div>
+          <div class="profile-provider-grid"><span><small>Интервал</small><b id="profile-provider-interval">Не задан</b></span><span><small>Трафик</small><b id="profile-provider-traffic">Не задан</b></span><span><small>Действует до</small><b id="profile-provider-expire">Не задано</b></span></div>
+          <p class="profile-provider-announce hidden" id="profile-provider-announce"></p>
+          <p class="profile-provider-announce hidden" id="profile-provider-hwid"></p>
+          <div class="profile-provider-links hidden" id="profile-provider-links"><a class="hidden" id="profile-provider-page" target="_blank" rel="noopener">Страница профиля<svg><use href="#i-external"/></svg></a><a class="hidden" id="profile-provider-support" target="_blank" rel="noopener">Поддержка<svg><use href="#i-external"/></svg></a></div>
+        </section>
+
+        <details class="collapse-block" id="profile-request-details">
+          <summary><span>HTTP-заголовки запроса<small>Передаются только этой подписке</small></span><svg><use href="#i-chevron"/></svg></summary>
+          <div class="profile-headers-body">
+            <label class="setting-row switch-row"><span><b>Использовать заголовки профиля</b><small>Одноимённые ключи заменяют глобальные без учёта регистра</small></span><input id="profile-use-headers" type="checkbox"><i></i></label>
+            <div class="profile-local-section">
+              <div class="header-editor-intro"><span><b>HTTP-заголовки запроса</b><small>Одноимённые ключи заменяют глобальные без учёта регистра</small></span><button class="secondary-button" type="button" id="add-profile-header"><svg><use href="#i-plus"/></svg>Добавить заголовок</button></div>
+              <div class="header-columns" aria-hidden="true"><span>Ключ</span><span>Значение</span><span></span></div>
+              <div class="header-rows" id="profile-header-rows"></div>
+            </div>
+          </div>
+        </details>
+
+        <aside class="profile-editor-alert hidden" id="profile-editor-alert"><svg><use href="#i-alert"/></svg><div><b>Последнее обновление отклонено</b><p id="profile-editor-error"></p></div></aside>
+      </form>
+      <footer class="modal-actions"><button class="secondary-button" type="button" id="cancel-editor">Отмена</button><button class="primary-button" type="submit" form="profile-form" id="save-profile"><svg><use href="#i-check"/></svg>Сохранить</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-layer hidden" id="source-json-modal">
+    <section class="modal config-modal" role="dialog" aria-modal="true" aria-labelledby="source-json-title">
+      <header class="modal-header"><div><h2 id="source-json-title">Полученный JSON</h2><p id="source-json-subtitle">Последний корректный HTTP-ответ источника без локальных изменений</p></div><button class="round-button" type="button" id="close-source-json" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
+      <div class="config-modal-body"><pre class="config-viewer json-viewer" id="source-json-viewer" role="textbox" aria-readonly="true" tabindex="0">Файл ещё не создан.</pre></div>
+      <footer class="modal-actions"><button class="secondary-button" type="button" id="copy-source-json"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-source-json">Готово</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-layer hidden" id="runtime-json-modal">
+    <section class="modal config-modal" role="dialog" aria-modal="true" aria-labelledby="runtime-json-title">
+      <header class="modal-header"><div><h2 id="runtime-json-title">Конфигурация запуска</h2><p id="runtime-json-subtitle">Выбранный полный JSON с локальными входами RouterOS</p></div><button class="round-button" type="button" id="close-runtime-json" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
+      <div class="config-modal-body"><pre class="config-viewer json-viewer" id="runtime-json-viewer" role="textbox" aria-readonly="true" tabindex="0">Файл ещё не создан.</pre></div>
+      <footer class="modal-actions"><button class="secondary-button" type="button" id="rebuild-runtime"><svg><use href="#i-refresh"/></svg>Применить заново</button><button class="secondary-button" type="button" id="copy-runtime-json"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-runtime-json">Готово</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-layer hidden" id="runtime-events-modal">
+    <section class="modal config-modal" role="dialog" aria-modal="true" aria-labelledby="runtime-events-title">
+      <header class="modal-header"><div><h2 id="runtime-events-title">События контейнера</h2><p>Загрузка подписок, проверка JSON и запуск Xray · журнал хранится только в RAM</p></div><button class="round-button" type="button" id="close-runtime-events" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
+      <div class="config-modal-body events-modal-body"><div class="events-diagnostic-summary" id="events-diagnostic-summary"></div><textarea class="config-viewer" id="runtime-events" readonly spellcheck="false">Событий пока нет.</textarea></div>
+      <footer class="modal-actions"><span class="modal-footer-state" id="runtime-events-state">Событий пока нет</span><button class="secondary-button" type="button" id="copy-runtime-events"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-runtime-events">Готово</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-layer hidden" id="delete-modal">
+    <section class="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><span class="danger-icon"><svg><use href="#i-trash"/></svg></span><h2 id="delete-title">Удалить подписку?</h2><p id="delete-message">Профиль, исходный JSON и рабочая конфигурация будут удалены.</p><div class="confirm-actions"><button class="secondary-button" type="button" id="delete-cancel">Отмена</button><button class="danger-button" type="button" id="delete-confirm">Удалить</button></div></section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="assets/app.js"></script>
+</body>
+</html>

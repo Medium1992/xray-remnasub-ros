@@ -1,0 +1,52 @@
+[
+  {
+    "remarks": "E2E Alpha",
+    "geodata": {
+      "assets": []
+    },
+    "outbounds": [
+      {
+        "tag": "proxy-alpha",
+        "protocol": "socks",
+        "settings": {
+          "servers": [
+            {
+              "address": "127.0.0.1",
+              "port": 18081
+            }
+          ]
+        }
+      },
+      {
+        "tag": "direct",
+        "protocol": "freedom",
+        "settings": {}
+      }
+    ]
+  },
+  {
+    "remarks": "E2E Beta",
+    "geodata": {
+      "assets": []
+    },
+    "outbounds": [
+      {
+        "tag": "proxy-beta",
+        "protocol": "socks",
+        "settings": {
+          "servers": [
+            {
+              "address": "127.0.0.1",
+              "port": 18082
+            }
+          ]
+        }
+      },
+      {
+        "tag": "direct",
+        "protocol": "freedom",
+        "settings": {}
+      }
+    ]
+  }
+]

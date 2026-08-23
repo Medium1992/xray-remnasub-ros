@@ -1,0 +1,31 @@
+.git
+.github
+.gitignore
+.gitattributes
+.idea
+.vscode
+.tools
+
+cmd
+config
+www
+tests
+docs
+
+README*.md
+ui-preview*.png
+VERSIONS
+
+*.log
+*.tmp
+*.tar
+
+.env
+.env.*
+coverage*
+dist
+build
+
+# Базовый слой armv5: ADD rootfs.tar / в Dockerfile берёт его из контекста
+# сборки, поэтому общее правило *.tar на него распространяться не должно.
+!rootfs.tar

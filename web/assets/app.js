@@ -491,7 +491,7 @@
 
   function settingsStateSignature() {
     return JSON.stringify([
-      model.global_headers_b64, model.listener_mode, model.effective_listener_mode, model.firewall_backend, model.redir_port, model.tproxy_port,
+      model.global_headers_b64, model.default_headers, model.listener_mode, model.effective_listener_mode, model.firewall_backend, model.redir_port, model.tproxy_port,
       model.log_level,
       model.network_qdisc, model.network_disable_ipv6, model.network_disable_multicast,
       model.network_ct_established, model.network_ct_unacknowledged, model.network_ct_syn_sent,
@@ -555,7 +555,8 @@
     const fingerprint = settingsStateSignature();
     if (!force && (ui.settingsDirty || fingerprint === settingsFingerprint)) return;
     settingsFingerprint = fingerprint;
-    renderHeaders("global-header-rows", decode(model.global_headers_b64), true);
+    $("global-default-headers").checked = Number(model.default_headers ?? 1) !== 0;
+    renderHeaders("global-header-rows", decode(model.global_headers_b64), $("global-default-headers").checked);
     all('input[name="listener-mode"]').forEach((input) => { input.checked = input.value === (model.listener_mode || "auto"); });
     $("redir-port").value = model.redir_port ?? 12345;
     $("tproxy-port").value = model.tproxy_port ?? 12346;
@@ -897,6 +898,7 @@
       await api("save-settings", {
         global_headers_present: "1",
         global_headers: collectHeaders("global-header-rows"),
+        default_headers: $("global-default-headers").checked ? "1" : "0",
         listener_mode: listenerMode,
         redir_port: $("redir-port").value,
         tproxy_port: $("tproxy-port").value,
@@ -1062,6 +1064,18 @@
   all('input[name="listener-mode"]').forEach((input) => input.addEventListener("change", updateListenerDescription));
   all('input[name="geodata-storage"]').forEach((input) => input.addEventListener("change", updateGeodataFields));
   $("xray-sniffing-enabled").addEventListener("change", updateSniffingFields);
+  // Переключатель перерисовывает список из того, что сейчас в редакторе, а не
+  // из модели: иначе несохранённые правки пропали бы. Выключение убирает
+  // обязательные строки, поэтому после сохранения они исчезают и из состояния,
+  // и подставлять их будет уже нечему.
+  $("global-default-headers").addEventListener("change", (event) => {
+    const enabled = event.target.checked;
+    const fallbacks = new Map(requiredHeaders);
+    const kept = parseHeaders(collectHeaders("global-header-rows"))
+      .filter(([key, value]) => enabled || fallbacks.get(key.toLowerCase()) !== value);
+    renderHeaders("global-header-rows", kept.map(([key, value]) => `${key}: ${value}`).join("\n"), enabled);
+    ui.settingsDirty = true;
+  });
   $("add-global-header").addEventListener("click", () => {
     appendHeader("global-header-rows");
     ui.settingsDirty = true;

@@ -132,6 +132,14 @@ The container does not rewrite `routing.rules[].inboundTag`. Rules without `inbo
 
 An authoritative empty response, HTTP `401/403/404/410/451`, or an explicit HWID restriction disables the active runtime. Transport errors, timeouts, `5xx`, malformed JSON, and invalid Xray configurations retain the last-good version.
 
+## 📨 Request Headers
+
+Remnawave picks the subscription format from the `User-Agent`, so the container sends a client header set by default: `x-hwid`, `x-device-os`, `x-ver-os`, `x-device-model` and `user-agent`. A value you set explicitly always wins over the substituted one.
+
+The "Default headers" switch on the Requests tab turns that substitution off entirely. With it off, only the headers you entered yourself are sent: the panel drops untouched defaults from the list and keeps the ones you edited. This matters when a provider expects its own header set, or when a foreign `User-Agent` gets in the way.
+
+Per-profile headers take precedence over the global ones. Toggling the switch, like editing the headers themselves, triggers a fresh download of the active subscription, because the request is now a different one.
+
 ## ♻️ Core Restarts
 
 A scheduled refresh that returns the same subscription does not restart Xray. Before publishing a candidate the container compares it with the running version: the subscription fragment, the container's own fragments, the configuration set, the listener metadata, the source digest, and the geodata asset key. When all of them match, the candidate is discarded, `configuration unchanged` is written to the event log, and established connections survive.

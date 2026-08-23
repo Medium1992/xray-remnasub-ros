@@ -95,7 +95,8 @@
             <section class="settings-section settings-panel active" data-settings-panel="requests">
               <div class="settings-title"><h2>Заголовки Remnawave</h2><p>Используются по умолчанию при загрузке каждой подписки</p></div>
               <div class="settings-grid header-editor">
-                <div class="header-editor-intro"><span><b>HTTP-заголовки</b><small>Обязательные ключи всегда отправляются. Заголовки отдельного профиля имеют приоритет.</small></span><button class="secondary-button" type="button" id="add-global-header"><svg><use href="#i-plus"/></svg>Добавить заголовок</button></div>
+                <label class="setting-row switch-row"><span><b>Заголовки по умолчанию</b><small>Подставлять обязательные ключи Remnawave, если вы не задали их сами</small></span><input id="global-default-headers" type="checkbox"><i></i></label>
+                <div class="header-editor-intro"><span><b>HTTP-заголовки</b><small>Заголовки отдельного профиля имеют приоритет над этими</small></span><button class="secondary-button" type="button" id="add-global-header"><svg><use href="#i-plus"/></svg>Добавить заголовок</button></div>
                 <div class="header-columns" aria-hidden="true"><span>Ключ</span><span>Значение</span><span></span></div>
                 <div class="header-rows" id="global-header-rows"></div>
               </div>

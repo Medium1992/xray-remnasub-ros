@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM --platform=$BUILDPLATFORM alpine:3.22 AS package
+FROM --platform=$BUILDPLATFORM alpine:latest AS package
 ARG TARGETARCH
 ARG TARGETVARIANT
 ARG XRAY_VERSION=v26.7.28
@@ -31,9 +31,9 @@ RUN chmod 0755 /final/entrypoint.sh /final/lib.sh /final/www/cgi-bin/api /final/
 # xray-proxy-ros. В нём уже лежат busybox httpd, jq, openssl, iptables, ip, tc,
 # nc, wget и набор CA-сертификатов, поэтому apk на этой архитектуре не нужен —
 # его там и нет.
-FROM --platform=linux/amd64 alpine:3.22 AS linux-amd64
-FROM --platform=linux/arm64 alpine:3.22 AS linux-arm64
-FROM --platform=linux/arm/v7 alpine:3.22 AS linux-armv7
+FROM --platform=linux/amd64 alpine:latest AS linux-amd64
+FROM --platform=linux/arm64 alpine:latest AS linux-arm64
+FROM --platform=linux/arm/v7 alpine:latest AS linux-armv7
 FROM --platform=linux/arm/v5 scratch AS linux-armv5
 ADD rootfs.tar /
 

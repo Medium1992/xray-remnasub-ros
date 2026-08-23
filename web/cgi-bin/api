@@ -360,7 +360,7 @@ EOF
     --slurpfile profiles "$status_profiles" --slurpfile configs "$status_configs" --rawfile events "$status_events" --arg active "$ACTIVE_PROFILE_ID" \
     --argjson run_enabled "$RUN_ENABLED" --argjson running "$running" --arg listener_mode "$LISTENER_MODE" \
     --argjson redir "$REDIR_PORT" --argjson tproxy "$TPROXY_PORT" --arg log_level "$LOG_LEVEL" \
-    --arg global_headers_b64 "$GLOBAL_HEADERS_B64" \
+    --arg global_headers_b64 "$GLOBAL_HEADERS_B64" --argjson default_headers "$DEFAULT_HEADERS" \
     --arg network_qdisc "$NETWORK_QDISC" --argjson network_disable_ipv6 "$NETWORK_DISABLE_IPV6" --argjson network_disable_multicast "$NETWORK_DISABLE_MULTICAST" \
     --argjson network_ct_established "$NETWORK_CT_ESTABLISHED" --argjson network_ct_syn_sent "$NETWORK_CT_SYN_SENT" --argjson network_ct_syn_recv "$NETWORK_CT_SYN_RECV" \
     --argjson network_ct_fin_wait "$NETWORK_CT_FIN_WAIT" --argjson network_ct_close_wait "$NETWORK_CT_CLOSE_WAIT" --argjson network_ct_last_ack "$NETWORK_CT_LAST_ACK" \
@@ -371,7 +371,7 @@ EOF
     --argjson geodata_total_bytes "$geodata_total_bytes" --argjson geodata_last_update "$geodata_last_update" --arg geodata_warning "$geodata_warning" \
     --arg backend "$backend" --arg active_interface "$active_interface" --arg active_interface_cidr "$active_interface_cidr" --arg effective_listener_mode "$effective_listener_mode" --arg version "$xray_version" \
     --arg ui_theme "$UI_THEME" --arg ui_accent "$UI_ACCENT" \
-    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
+    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,global_headers_b64:$global_headers_b64,default_headers:$default_headers,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
   status_result=$?
   rm -f "$status_profiles" "$status_events"
   [ "$status_configs" = "$active_configs" ] || rm -f "$status_configs"
@@ -807,7 +807,7 @@ EOF
   save-settings)
     state_lock || reply_error 'Could not lock container state'
     load_settings
-    old_global_headers=$GLOBAL_HEADERS_B64
+    old_global_headers=$GLOBAL_HEADERS_B64:$DEFAULT_HEADERS
     old_runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE
     LISTENER_MODE=$(form_value listener_mode); REDIR_PORT=$(form_value redir_port); TPROXY_PORT=$(form_value tproxy_port)
     LOG_LEVEL=$(form_value log_level)
@@ -817,6 +817,7 @@ EOF
       global_headers=$(form_value global_headers)
       valid_header_block "$global_headers" || reply_error 'Headers contain an invalid or duplicate name'
       GLOBAL_HEADERS_B64=$(b64_encode "$global_headers")
+      case "$(form_value default_headers)" in 0) DEFAULT_HEADERS=0 ;; *) DEFAULT_HEADERS=1 ;; esac
     fi
     value=$(form_value network_ct_established); [ -z "$value" ] || NETWORK_CT_ESTABLISHED=$value
     value=$(form_value network_ct_syn_sent); [ -z "$value" ] || NETWORK_CT_SYN_SENT=$value
@@ -879,7 +880,7 @@ EOF
       if [ "$old_runtime_signature" != "$runtime_signature" ] && [ -s "$(profile_source "$settings_id")" ]; then
         queue_job "$settings_id" build || true
       fi
-      if [ "$old_global_headers" != "$GLOBAL_HEADERS_B64" ] && [ -n "$(b64_decode "$(state_get "$settings_profile" URL_B64)")" ]; then
+      if [ "$old_global_headers" != "$GLOBAL_HEADERS_B64:$DEFAULT_HEADERS" ] && [ -n "$(b64_decode "$(state_get "$settings_profile" URL_B64)")" ]; then
         queue_job "$settings_id" fetch || true
       fi
     done

@@ -48,7 +48,7 @@ initialize_storage() {
     create_profile "$first"
   fi
   if [ ! -f "$STATE" ]; then
-    ACTIVE_PROFILE_ID=$first RUN_ENABLED=0 GLOBAL_HEADERS_B64= LISTENER_MODE=auto REDIR_PORT=12345 TPROXY_PORT=12346
+    ACTIVE_PROFILE_ID=$first RUN_ENABLED=0 GLOBAL_HEADERS_B64= DEFAULT_HEADERS=1 LISTENER_MODE=auto REDIR_PORT=12345 TPROXY_PORT=12346
     LOG_LEVEL=warning
     NETWORK_DISABLE_IPV6=1 NETWORK_DISABLE_MULTICAST=1 NETWORK_QDISC=fq_codel
     NETWORK_CT_ESTABLISHED=86400 NETWORK_CT_SYN_SENT=5 NETWORK_CT_SYN_RECV=5
@@ -84,7 +84,7 @@ effective_headers() {
   load_settings
   header_global=$RUNTIME_DIR/request-global.$$.headers
   header_local=$RUNTIME_DIR/request-local.$$.headers
-  b64_decode "$GLOBAL_HEADERS_B64" | awk '
+  b64_decode "$GLOBAL_HEADERS_B64" | awk -v defaults="$DEFAULT_HEADERS" '
     BEGIN {
       count=5
       order[1]="x-hwid"
@@ -112,7 +112,15 @@ effective_headers() {
       else if (key ~ /^[A-Za-z0-9-]+$/) custom[++custom_count]=key ": " value
     }
     END {
-      for (i=1; i<=count; i++) {key=order[i]; value=seen[key] && supplied[key] != "" ? supplied[key] : fallback[key]; print key ": " value}
+      # При выключенных значениях по умолчанию обязательные ключи не
+      # подставляются: уходят только те, что пользователь задал явно.
+      for (i=1; i<=count; i++) {
+        key=order[i]
+        if (seen[key] && supplied[key] != "") value=supplied[key]
+        else if (defaults == 1) value=fallback[key]
+        else continue
+        print key ": " value
+      }
       for (i=1; i<=custom_count; i++) print custom[i]
     }
   ' > "$header_global"

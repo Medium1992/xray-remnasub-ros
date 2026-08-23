@@ -2,7 +2,7 @@
 
 # xray-remnasub-ros
 
-> Мультиархитектурный контейнер для **MikroTik RouterOS**, запускающий Remnawave/Happ-подписку на [Xray-core](https://github.com/XTLS/Xray-core). Подписка — это массив полных Xray JSON-конфигураций; контейнер выбирает один элемент, добавляет только фрагменты, нужные для перехвата трафика RouterOS, проверяет результат и запускает его. Управление подписками и контейнером — встроенная веб-панель на BusyBox `httpd` + shell CGI.
+> Мультиархитектурный контейнер для **MikroTik RouterOS**, запускающий JSON-подписку на [Xray-core](https://github.com/XTLS/Xray-core). Подписка — это массив полных Xray JSON-конфигураций; контейнер выбирает один элемент, добавляет только фрагменты, нужные для перехвата трафика RouterOS, проверяет результат и запускает его. Управление подписками и контейнером — встроенная веб-панель на BusyBox `httpd` + shell CGI.
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/medium1992/xray-remnasub-ros?logo=docker&label=docker%20pulls)](https://hub.docker.com/r/medium1992/xray-remnasub-ros)
 [![Docker Image Size](https://img.shields.io/docker/image-size/medium1992/xray-remnasub-ros/latest?logo=docker&label=image%20size)](https://hub.docker.com/r/medium1992/xray-remnasub-ros)
@@ -108,7 +108,7 @@ docker run -d \
 ]
 ```
 
-Каждый элемент массива является отдельным полным Xray-конфигом, как в Happ. Контейнер не извлекает первый proxy outbound и не собирает общий balancer. У выбранного элемента сохраняются `dns`, `routing`, все `outbounds`, цепочки `proxySettings`/`dialerProxy`, `observatory`, `burstObservatory`, `policy`, `reverse` и остальные штатные поля.
+Контейнер работает только с JSON-подписками. Каждый элемент массива является отдельным полным Xray-конфигом. Контейнер не извлекает первый proxy outbound и не собирает общий balancer. У выбранного элемента сохраняются `dns`, `routing`, все `outbounds`, цепочки `proxySettings`/`dialerProxy`, `observatory`, `burstObservatory`, `policy`, `reverse` и остальные штатные поля.
 
 Поздними файлами `confdir` добавляются только:
 

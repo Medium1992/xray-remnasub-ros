@@ -2,7 +2,7 @@
 
 # xray-remnasub-ros
 
-> A multi-architecture container for **MikroTik RouterOS** that runs a Remnawave/Happ subscription with [Xray-core](https://github.com/XTLS/Xray-core). The subscription is an array of complete Xray JSON configurations; the container selects one, adds only the fragments RouterOS interception needs, validates the result, and runs it. Subscription and container management is provided by an embedded BusyBox `httpd` + shell CGI WebUI.
+> A multi-architecture container for **MikroTik RouterOS** that runs a JSON subscription with [Xray-core](https://github.com/XTLS/Xray-core). The subscription is an array of complete Xray JSON configurations; the container selects one, adds only the fragments RouterOS interception needs, validates the result, and runs it. Subscription and container management is provided by an embedded BusyBox `httpd` + shell CGI WebUI.
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/medium1992/xray-remnasub-ros?logo=docker&label=docker%20pulls)](https://hub.docker.com/r/medium1992/xray-remnasub-ros)
 [![Docker Image Size](https://img.shields.io/docker/image-size/medium1992/xray-remnasub-ros/latest?logo=docker&label=image%20size)](https://hub.docker.com/r/medium1992/xray-remnasub-ros)
@@ -91,7 +91,7 @@ The container blocks gateway ICMP until Xray and the interception rules are read
 
 ## 🧾 Subscription Model
 
-The response root must be a JSON array. Every array item is one complete Xray configuration, matching Happ semantics:
+This container consumes JSON subscriptions only. The response root must be a JSON array, and every array item is one complete Xray configuration:
 
 ```json
 [

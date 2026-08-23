@@ -23,7 +23,7 @@
 - 🩺 Real HTTP health checks through the configuration's own outbounds, not a bare TCP connect.
 - 🌍 Geodata bootstrapped before the core starts, then refreshed by Xray's own scheduler.
 - 🎨 Built-in WebUI on port `80` with colour themes, no Clash API and no external dashboard.
-- 🔐 HTTP Basic Auth with an in-app sha512crypt hash generator; no password is shared between installations.
+- 🔐 HTTP Basic Auth with an in-app `BASIC_AUTH_HASH` generator; the default login is `admin` / `admin`.
 - 💾 Profiles persist under `/etc/xray`; generated configurations, jobs, events and geodata stay in `/dev/shm`.
 - 🌐 `amd64`, `arm64`, `armv7` and `armv5` images.
 
@@ -48,15 +48,13 @@ docker run -d \
   -p 8080:80 \
   -v ./xray-remnasub:/etc/xray \
   -e BASIC_AUTH_USER=admin \
-  -e BASIC_AUTH_HASH='$1$replace$the-generated-hash' \
+  -e BASIC_AUTH_HASH='$1$xrayremn$Gr4qGSm.dBD8OHZ43KD2a.' \
   ghcr.io/medium1992/xray-remnasub-ros:latest
 ```
 
-Open `http://127.0.0.1:8080/`.
+Open `http://127.0.0.1:8080/`. The default credentials are `admin` / `admin`.
 
-Generate the hash with `openssl passwd -1 'replace-with-a-long-password'`, or from the panel's "Access" tab, which produces the stronger sha512crypt.
-
-When `BASIC_AUTH_HASH` is unset the container does not fall back to a password shared by every installation. It generates a random one on each start and prints it to the container log (`/log/print` on RouterOS, `docker logs` locally). That password changes on every restart, so set `BASIC_AUTH_HASH` for a permanent installation.
+Generate your own hash with `openssl passwd -1 'replace-with-a-long-password'`, or from the panel's "Access" tab, which produces the stronger sha512crypt.
 
 ## 🛠 RouterOS Installation
 
@@ -74,7 +72,7 @@ Enable containers in device mode on a new router first:
 /ip/address/add address=192.168.255.13/30 interface=XrayRemnaSub
 /container/mounts/add list=xray-remnasub-ros src=usb1/xray-remnasub dst=/etc/xray
 /container/envs/add list=xray-remnasub-ros key=BASIC_AUTH_USER value=admin
-/container/envs/add list=xray-remnasub-ros key=BASIC_AUTH_HASH value="\$1\$salt\$replace-with-your-digest"
+/container/envs/add list=xray-remnasub-ros key=BASIC_AUTH_HASH value="\$1\$xrayremn\$Gr4qGSm.dBD8OHZ43KD2a."
 /container/config/set registry-url=https://ghcr.io tmpdir=usb1/pull
 /container/add remote-image=ghcr.io/medium1992/xray-remnasub-ros:latest interface=XrayRemnaSub root-dir=usb1/xray-remnasub-root mountlists=xray-remnasub-ros envlists=xray-remnasub-ros logging=yes start-on-boot=yes comment=XrayRemnaSub
 ```

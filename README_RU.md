@@ -23,7 +23,7 @@
 - 🩺 Реальные HTTP-проверки через собственные outbounds конфигурации, а не TCP connect к адресу сервера.
 - 🌍 Geodata подготавливается до старта ядра, а обновляет её дальше сам Xray своим планировщиком.
 - 🎨 Встроенная веб-панель на порту `80`, семь тем оформления и свой акцентный цвет, без Clash API и внешнего dashboard.
-- 🔐 HTTP Basic Auth с генератором sha512crypt-хеша в панели; общего для всех установок пароля нет.
+- 🔐 HTTP Basic Auth с генератором `BASIC_AUTH_HASH` в панели; логин по умолчанию — `admin` / `admin`.
 - 💾 Профили лежат в `/etc/xray`; рабочие конфигурации, задания, события и geodata — в `/dev/shm`.
 - 🌐 Образы `amd64`, `arm64`, `armv7` и `armv5`.
 
@@ -48,15 +48,13 @@ docker run -d \
   -p 8080:80 \
   -v ./xray-remnasub:/etc/xray \
   -e BASIC_AUTH_USER=admin \
-  -e BASIC_AUTH_HASH='$1$replace$the-generated-hash' \
+  -e BASIC_AUTH_HASH='$1$xrayremn$Gr4qGSm.dBD8OHZ43KD2a.' \
   ghcr.io/medium1992/xray-remnasub-ros:latest
 ```
 
-Панель откроется на `http://127.0.0.1:8080/`. Для локальной проверки mixed inbound можно дополнительно опубликовать `1080/tcp`.
+Панель откроется на `http://127.0.0.1:8080/`, логин и пароль по умолчанию — `admin` / `admin`. Для локальной проверки mixed inbound можно дополнительно опубликовать `1080/tcp`.
 
-Хеш создаётся командой `openssl passwd -1 'replace-with-a-long-password'` либо во вкладке «Доступ» самой панели — она отдаёт sha512crypt, который надёжнее md5crypt из `openssl passwd -1`.
-
-Если `BASIC_AUTH_HASH` не задан, контейнер не поднимает панель с общим для всех паролем: он генерирует случайный пароль на каждый старт и печатает его в журнал контейнера (`/log/print` в RouterOS, `docker logs` локально). Пароль меняется при каждом перезапуске, поэтому для постоянной установки задайте `BASIC_AUTH_HASH`.
+Свой хеш создаётся командой `openssl passwd -1 'replace-with-a-long-password'` либо во вкладке «Доступ» самой панели — она отдаёт sha512crypt, который надёжнее md5crypt из `openssl passwd -1`.
 
 ## 🛠 Установка в RouterOS
 
@@ -74,7 +72,7 @@ docker run -d \
 /ip/address/add address=192.168.255.13/30 interface=XrayRemnaSub
 /container/mounts/add list=xray-remnasub-ros src=usb1/xray-remnasub dst=/etc/xray
 /container/envs/add list=xray-remnasub-ros key=BASIC_AUTH_USER value=admin
-/container/envs/add list=xray-remnasub-ros key=BASIC_AUTH_HASH value="\$1\$salt\$replace-with-your-digest"
+/container/envs/add list=xray-remnasub-ros key=BASIC_AUTH_HASH value="\$1\$xrayremn\$Gr4qGSm.dBD8OHZ43KD2a."
 /container/config/set registry-url=https://ghcr.io tmpdir=usb1/pull
 /container/add remote-image=ghcr.io/medium1992/xray-remnasub-ros:latest interface=XrayRemnaSub root-dir=usb1/xray-remnasub-root mountlists=xray-remnasub-ros envlists=xray-remnasub-ros logging=yes start-on-boot=yes comment=XrayRemnaSub
 ```

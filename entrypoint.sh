@@ -916,25 +916,10 @@ else
   printf 'iptables\n' > "$RUNTIME_DIR/firewall.backend"
 fi
 
-# Пароль по умолчанию, одинаковый для всех установок, — это опубликованный
-# пароль: репозиторий открыт, и хеш в нём виден каждому. Поэтому пока
-# BASIC_AUTH_HASH не задан, пароль генерируется случайным на каждый старт и
-# печатается в журнал контейнера. На диск при этом не ложится ничего, а сам
-# хеш считается один раз до старта httpd — иначе watchdog при перезапуске
-# веб-сервера выдал бы новый пароль и выкинул пользователя из панели.
-GENERATED_AUTH_HASH=
-if [ "${BASIC_AUTH:-on}" != off ] && [ -z "${BASIC_AUTH_HASH:-}" ]; then
-  generated_password=$(tr -dc 'A-Za-z0-9' < /dev/urandom 2>/dev/null | head -c 20)
-  GENERATED_AUTH_HASH=$(password_hash "$generated_password" 2>/dev/null | head -n 1) || GENERATED_AUTH_HASH=
-  if [ -z "$GENERATED_AUTH_HASH" ]; then
-    echo 'could not generate a password for the web panel; set BASIC_AUTH_HASH' >&2
-    exit 1
-  fi
-  printf 'BASIC_AUTH_HASH is not set, so the web panel password was generated: %s / %s\n' \
-    "${BASIC_AUTH_USER:-admin}" "$generated_password"
-  printf 'It changes on every container start; set BASIC_AUTH_HASH to pin your own.\n'
-  generated_password=
-fi
+# md5crypt от admin. Умолчание задокументировано в README, как в соседних
+# контейнерах: панель должна открываться сразу после установки, а смена пароля
+# остаётся шагом пользователя.
+BASIC_AUTH_HASH_DEFAULT='$1$xrayremn$Gr4qGSm.dBD8OHZ43KD2a.'
 
 start_httpd() {
   auth=${BASIC_AUTH:-on}
@@ -942,7 +927,7 @@ start_httpd() {
     httpd -f -p 80 -h /www &
   else
     auth_user=${BASIC_AUTH_USER:-admin}
-    auth_hash=${BASIC_AUTH_HASH:-$GENERATED_AUTH_HASH}
+    auth_hash=${BASIC_AUTH_HASH:-$BASIC_AUTH_HASH_DEFAULT}
     printf '/:%s:%s\n' "$auth_user" "$auth_hash" > "$RUNTIME_DIR/httpd.conf"
     chmod 600 "$RUNTIME_DIR/httpd.conf" 2>/dev/null || true
     httpd -f -p 80 -h /www -c "$RUNTIME_DIR/httpd.conf" &

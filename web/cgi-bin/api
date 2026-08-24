@@ -324,6 +324,14 @@ status_response() {
     active_runtime_listener_mode=$(jq -r '.mode // empty' "$active_runtime_dir/.metadata/listener.json" 2>/dev/null || true)
     case "$active_runtime_listener_mode" in tproxy|redir-tproxy|redir-tun) effective_listener_mode=$active_runtime_listener_mode ;; esac
   fi
+  # Пока Xray не запускался, режима в метаданных ещё нет, и раньше сюда
+  # уходило слово auto — панель принимала его за фактический режим и рисовала
+  # TUN независимо от того, что умеет ядро. Подставляем разобранный при старте
+  # результат.
+  if [ "$effective_listener_mode" = auto ]; then
+    effective_listener_mode=$(cat "$RUNTIME_DIR/listener.auto" 2>/dev/null || true)
+    case "$effective_listener_mode" in tproxy|redir-tproxy|redir-tun) ;; *) effective_listener_mode=redir-tun ;; esac
+  fi
   xray_probe_url=$(b64_decode "$XRAY_PROBE_URL_B64")
   geodata_asset_dir=
   geodata_asset_count=0

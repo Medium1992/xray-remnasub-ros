@@ -522,7 +522,10 @@
   function updateListenerDescription() {
     const selected = document.querySelector('input[name="listener-mode"]:checked')?.value || "auto";
     const nft = model.firewall_backend === "nftables";
-    const effective = model.effective_listener_mode || (nft ? "redir-tproxy" : "redir-tun");
+    // auto здесь не режим, а «ещё не разобрано»: принимать его за фактический
+    // означало бы обещать TUN там, где ядро прекрасно умеет TPROXY.
+    const reported = model.effective_listener_mode;
+    const effective = reported && reported !== "auto" ? reported : (nft ? "redir-tproxy" : "redir-tun");
     const effectiveUsesTproxy = effective === "tproxy" || effective === "redir-tproxy";
     $("auto-mode-description").textContent = `Фактически: ${effective}`;
     const descriptions = {

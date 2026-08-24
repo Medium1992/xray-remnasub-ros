@@ -276,6 +276,11 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .config-row-copy small { color: var(--faint); font-size: 9px; }
 .config-row-state { color: var(--muted); font-size: 9px; font-weight: 700; text-align: right; }
 .config-row.selected .config-row-state { color: var(--primary); }
+/* Пока контейнер не подтвердил переключение, строка подсвечена как выбранная,
+   но помечена пульсацией: видно, что это ещё намерение, а не факт. */
+.config-row.switching .config-row-state { color: var(--warning); }
+.config-row.switching .config-row-index { color: var(--base-300); background: var(--warning); animation: config-switching 1.1s ease-in-out infinite; }
+@keyframes config-switching { 50% { opacity: .45; } }
 .config-probe, .config-probe-all { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; color: var(--muted); background: transparent; font-size: 9px; font-weight: 750; }
 .config-probe { min-width: 0; margin: 8px 0; padding: 0 8px; border-left: 1px solid var(--border); }
 .config-probe svg, .config-probe-all svg { width: 14px; height: 14px; }

@@ -120,7 +120,8 @@ docker run -d \
 
 | Тег | Где используется |
 |---|---|
-| `xray-remnasub-local` | локальный вход SOCKS или HTTP, если включён |
+| `xray-remnasub-socks` | локальный вход SOCKS, если включён |
+| `xray-remnasub-http` | локальный вход HTTP, если включён |
 | `xray-remnasub-tproxy` | общий TCP/UDP inbound в режиме `tproxy` |
 | `xray-remnasub-tcp` | TCP REDIR в режимах `redir-tproxy` и `redir-tun` |
 | `xray-remnasub-udp` | UDP TPROXY в режиме `redir-tproxy` |

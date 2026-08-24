@@ -120,7 +120,8 @@ Container-managed inbound tags are stable and reserved:
 
 | Tag | Used by |
 |---|---|
-| `xray-remnasub-local` | the local SOCKS or HTTP inbound, when enabled |
+| `xray-remnasub-socks` | the local SOCKS inbound, when enabled |
+| `xray-remnasub-http` | the local HTTP inbound, when enabled |
 | `xray-remnasub-tproxy` | combined TCP/UDP inbound in `tproxy` mode |
 | `xray-remnasub-tcp` | TCP REDIR in `redir-tproxy` and `redir-tun` modes |
 | `xray-remnasub-udp` | UDP TPROXY in `redir-tproxy` mode |

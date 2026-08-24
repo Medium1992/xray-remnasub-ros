@@ -295,10 +295,12 @@ status_response() {
     rm -f "$status_profiles" "$status_configs" "$status_events"
     reply_error 'Could not read profiles'
   fi
+  # Копия, а не путь на живой каталог версии. Установка новой конфигурации
+  # заменяет каталог целиком, и между проверкой на существование и запуском jq
+  # файл успевал исчезнуть — статус падал с «Bad JSON ... No such file».
   active_configs=$(profile_configs "$ACTIVE_PROFILE_ID" 2>/dev/null || true)
-  if [ -s "$active_configs" ]; then
-    status_configs=$active_configs
-  else
+  if [ -z "$active_configs" ] || ! cp "$active_configs" "$status_configs" 2>/dev/null ||
+     [ ! -s "$status_configs" ] || ! jq -e 'type == "array"' "$status_configs" >/dev/null 2>&1; then
     printf '[]\n' > "$status_configs"
   fi
   status_probes=$RUNTIME_DIR/status-probes.$$.json
@@ -398,7 +400,7 @@ EOF
     '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,inbound_strip_socks:$inbound_strip_socks,inbound_strip_http:$inbound_strip_http,local_socks_enabled:$local_socks_enabled,local_socks_port:$local_socks_port,local_socks_user:$local_socks_user,local_socks_has_pass:$local_socks_has_pass,local_http_enabled:$local_http_enabled,local_http_port:$local_http_port,local_http_user:$local_http_user,local_http_has_pass:$local_http_has_pass,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
   status_result=$?
   rm -f "$status_profiles" "$status_events"
-  [ "$status_configs" = "$active_configs" ] || rm -f "$status_configs"
+  rm -f "$status_configs"
   rm -f "$status_probes"
   return "$status_result"
 }

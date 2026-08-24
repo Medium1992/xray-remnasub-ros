@@ -58,6 +58,7 @@
     themeDraft: undefined,
     accentDraft: undefined,
     selectingProfileId: "",
+    pendingConfig: null,
     busy: new Set(),
     probes: new Map(),
   };
@@ -412,6 +413,7 @@
       running: model.running,
       runEnabled: model.run_enabled,
       selecting: ui.selectingProfileId,
+      pendingConfig: ui.pendingConfig,
       profiles: model.profiles,
       configs: model.configs,
       busy: Array.from(ui.busy).sort(),
@@ -420,6 +422,19 @@
     });
     if (fingerprint === cardsFingerprint) return;
     cardsFingerprint = fingerprint;
+    // Список пересобирается целиком, а во время обновления подписки опрос идёт
+    // раз в 800 мс — без этого фокус слетал с кнопки под курсором, и клик
+    // попадал уже по новому узлу. Запоминаем, что было в фокусе, и возвращаем.
+    const focused = document.activeElement;
+    const focusedKey = focused && $("subscription-list")?.contains(focused)
+      ? [focused.dataset.configIndex, focused.dataset.probeIndex, focused.dataset.profileAction, focused.className].join("|")
+      : "";
+    const restoreFocus = () => {
+      if (!focusedKey) return;
+      const match = all("button", $("subscription-list")).find((button) =>
+        [button.dataset.configIndex, button.dataset.probeIndex, button.dataset.profileAction, button.className].join("|") === focusedKey);
+      if (match && !match.disabled) match.focus({ preventScroll: true });
+    };
     $("subscription-list").innerHTML = model.profiles.map((profile) => {
       const active = profile.id === model.active_profile_id;
       const health = profileHealth(profile);
@@ -461,6 +476,7 @@
     }).join("");
     $("subscription-list").classList.toggle("hidden", model.profiles.length === 0);
     $("subscription-empty").classList.toggle("hidden", model.profiles.length !== 0);
+    restoreFocus();
   }
 
   function renderConfigRows(profile) {
@@ -469,9 +485,12 @@
     const probeAllBusy = ui.busy.has(`probe-all:${profile.id}`);
     const probeRunning = Array.from(ui.probes.entries()).some(([key, probe]) => key.startsWith(`${profile.id}:`) && probe.pending);
     return `<div class="subscription-configs"><div class="config-list-heading"><span>Конфигурации подписки <small>${configs.length}</small></span><button class="config-probe-all${probeAllBusy ? " loading" : ""}" type="button" data-probe-all title="Проверить все конфигурации одним экземпляром Xray"${probeAllBusy || probeRunning ? " disabled" : ""}>${icon("activity")}<span>${probeAllBusy ? "Проверка" : "Проверить все"}</span></button></div><div class="config-list">${configs.map((config) => {
-      const selected = profile.selected_config_fingerprint
-        ? config.fingerprint === profile.selected_config_fingerprint
-        : Number(config.index) === Number(profile.selected_config_index);
+      const pending = pendingSelectionFor(profile);
+      const selectedFingerprint = pending ? pending.fingerprint : profile.selected_config_fingerprint;
+      const selectedIndex = pending ? pending.index : profile.selected_config_index;
+      const selected = selectedFingerprint
+        ? config.fingerprint === selectedFingerprint
+        : Number(config.index) === Number(selectedIndex);
       const description = config.description && config.description !== config.name ? `<small>${escapeHtml(config.description)}</small>` : "";
       const probeKey = `${profile.id}:${config.fingerprint || config.index}`;
       // Локальное состояние важнее сохранённого: пока проверка идёт, показываем
@@ -499,7 +518,9 @@
       const probeMethod = String(probe?.method || model.xray_probe_http_method || "HEAD").toUpperCase();
       const probeSource = probe?.source ? ` · источник: ${probe.source}` : "";
       const probeTitle = probe?.error || `HTTP ${probeMethod} через Xray${probeSource}`;
-      return `<div class="config-row${selected ? " selected" : ""}"><button class="config-row-select" type="button" data-config-index="${Number(config.index)}" aria-pressed="${selected ? "true" : "false"}"${selected || ui.busy.has("config") ? " disabled" : ""}><span class="config-row-index">${Number(config.index) + 1}</span><span class="config-row-copy"><strong>${escapeHtml(config.name || `Конфигурация ${Number(config.index) + 1}`)}</strong>${description}</span><span class="config-row-state">${selected ? "выбрана" : "выбрать"}</span></button><button class="config-probe${probeClass}" type="button" data-probe-index="${Number(config.index)}" title="${escapeHtml(probeTitle)}"${probeRunning || probeAllBusy ? " disabled" : ""}>${icon("activity")}<span>${escapeHtml(probeLabel)}</span></button></div>`;
+      const switching = Boolean(pending) && selected;
+      const rowState = switching ? "переключение..." : selected ? "выбрана" : "выбрать";
+      return `<div class="config-row${selected ? " selected" : ""}${switching ? " switching" : ""}"><button class="config-row-select" type="button" data-config-index="${Number(config.index)}" aria-pressed="${selected ? "true" : "false"}"${selected || pending || ui.busy.has("config") ? " disabled" : ""}><span class="config-row-index">${Number(config.index) + 1}</span><span class="config-row-copy"><strong>${escapeHtml(config.name || `Конфигурация ${Number(config.index) + 1}`)}</strong>${description}</span><span class="config-row-state">${rowState}</span></button><button class="config-probe${probeClass}" type="button" data-probe-index="${Number(config.index)}" title="${escapeHtml(probeTitle)}"${probeRunning || probeAllBusy ? " disabled" : ""}>${icon("activity")}<span>${escapeHtml(probeLabel)}</span></button></div>`;
     }).join("")}</div><p class="config-probe-note">«Проверить все» поднимает один экземпляр Xray на всю подписку и опрашивает outbound параллельно. Проверка отдельной строки поднимает свой экземпляр рядом с работающим ядром.</p></div>`;
   }
 
@@ -826,6 +847,7 @@
       result.profiles = Array.isArray(result.profiles) ? result.profiles : [];
       result.configs = Array.isArray(result.configs) ? result.configs : [];
       model = result;
+      settlePendingSelection();
       pollFailures = 0;
       render(forceSettings);
     } catch (error) {
@@ -853,22 +875,55 @@
 
   async function selectConfig(configIndex) {
     const profile = activeProfile();
-    if (!profile || !Number.isInteger(Number(configIndex))) return;
+    if (!profile || !Number.isInteger(Number(configIndex)) || ui.pendingConfig) return;
     const config = model.configs.find((entry) => Number(entry.index) === Number(configIndex));
     if (!config) return;
     const alreadySelected = profile.selected_config_fingerprint
       ? config.fingerprint === profile.selected_config_fingerprint
       : Number(config.index) === Number(profile.selected_config_index);
     if (alreadySelected) return;
-    const result = await api("select-config", { profile_id: profile.id, config_index: String(Number(configIndex)) });
-    if (!result.changed) return;
-    profile.selected_config_index = Number(config.index);
-    profile.selected_config_fingerprint = config.fingerprint;
-    model.configs.forEach((entry) => { entry.selected = entry.fingerprint === config.fingerprint; });
+    // Выбор запоминается до запроса и держится, пока контейнер не подтвердит
+    // его в статусе. Раньше подсветка бралась только из модели, а её заменяет
+    // каждый опрос — пока шла пересборка, сервер ещё отдавал прежнюю строку, и
+    // выделение прыгало туда-сюда.
+    ui.pendingConfig = { profileId: profile.id, index: Number(config.index), fingerprint: config.fingerprint, at: Date.now() };
     cardsFingerprint = "";
     renderSubscriptions();
-    toast("Конфигурация выбрана, обновление поставлено в очередь");
-    await refresh();
+    try {
+      const result = await api("select-config", { profile_id: profile.id, config_index: String(Number(configIndex)) });
+      if (!result.changed) {
+        ui.pendingConfig = null;
+        cardsFingerprint = "";
+        renderSubscriptions();
+        return;
+      }
+      toast("Конфигурация выбрана, обновление поставлено в очередь");
+      await refresh();
+    } catch (error) {
+      ui.pendingConfig = null;
+      cardsFingerprint = "";
+      renderSubscriptions();
+      throw error;
+    }
+  }
+
+  function pendingSelectionFor(profile) {
+    const pending = ui.pendingConfig;
+    if (!pending || pending.profileId !== profile.id) return null;
+    return pending;
+  }
+
+  // Ожидание снимается, когда контейнер отдал ту же строку выбранной, либо по
+  // сроку: иначе неудача на стороне контейнера оставила бы список навсегда
+  // заблокированным.
+  function settlePendingSelection() {
+    const pending = ui.pendingConfig;
+    if (!pending) return;
+    const profile = profileById(pending.profileId);
+    const confirmed = profile && (profile.selected_config_fingerprint
+      ? profile.selected_config_fingerprint === pending.fingerprint
+      : Number(profile.selected_config_index) === pending.index);
+    if (confirmed || !profile || Date.now() - pending.at > 90000) ui.pendingConfig = null;
   }
 
   async function probeConfig(configIndex, quiet = false) {

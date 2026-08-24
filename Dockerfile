@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 FROM --platform=$BUILDPLATFORM alpine:latest AS package
 ARG TARGETARCH
 ARG TARGETVARIANT
@@ -26,11 +25,6 @@ COPY scripts /final/scripts
 COPY LICENSE /final/usr/share/licenses/xray-remnasub-ros/LICENSE
 RUN chmod 0755 /final/entrypoint.sh /final/lib.sh /final/www/cgi-bin/api /final/scripts/*.sh
 
-# Базы по платформам. У Alpine нет образа под armv5, поэтому там scratch плюс
-# готовый Buildroot-rootfs — тот же архив, что в mihomo-remnasub-ros и
-# xray-proxy-ros. В нём уже лежат busybox httpd, jq, openssl, iptables, ip, tc,
-# nc, wget и набор CA-сертификатов, поэтому apk на этой архитектуре не нужен —
-# его там и нет.
 FROM --platform=linux/amd64 alpine:latest AS linux-amd64
 FROM --platform=linux/arm64 alpine:latest AS linux-arm64
 FROM --platform=linux/arm/v7 alpine:latest AS linux-armv7
@@ -41,12 +35,6 @@ FROM ${TARGETOS}-${TARGETARCH}${TARGETVARIANT}
 ARG TARGETARCH
 ARG TARGETVARIANT
 COPY --from=package /final /
-# На arm64 и amd64 в образ идёт только nftables: в ядре RouterOS они есть с
-# 7.21 и только на этих архитектурах. iptables там понадобится лишь тому, кто
-# поставил контейнер на прошивку постарше, поэтому он не вшивается, а
-# докачивается entrypoint-ом по наличию модуля nf_tables — образ не должен
-# нести полтора мегабайта, нужные меньшинству. На armv7 наоборот: nftables в
-# ядре не будет никогда, там iptables с legacy-симлинками ставится сразу.
 RUN if [ "$TARGETARCH" = amd64 ] || [ "$TARGETARCH" = arm64 ]; then \
       apk add --no-cache busybox-extras ca-certificates iproute2 jq nftables openssl tzdata; \
     elif [ "$TARGETARCH/$TARGETVARIANT" = arm/v7 ]; then \

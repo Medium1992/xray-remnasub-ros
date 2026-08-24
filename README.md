@@ -10,6 +10,8 @@
 ![Platforms](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7%20%7C%20armv5-blue)
 [![Telegram](https://img.shields.io/badge/Telegram-group-blue?logo=telegram)](https://t.me/+96HVPF3Ww6o3YTNi)
 
+![RemnaSub Xray RoS WebUI](/docs/screenshots/subscriptions.png)
+
 ## ✨ Features
 
 - 📚 Multiple subscription profiles with an active selection, manual and scheduled refresh, and per-profile settings.
@@ -22,6 +24,8 @@
 - 🔀 REDIR + TPROXY, pure TPROXY, and REDIR + TUN interception, selected according to RouterOS kernel support.
 - 🩺 Real HTTP health checks through the configuration's own outbounds, not a bare TCP connect.
 - 🌍 Geodata bootstrapped before the core starts, then refreshed by Xray's own scheduler.
+- 🧰 Inbounds carried by the subscription are stripped, while the container's own SOCKS and HTTP proxies are configured separately and start disabled.
+- 📝 Xray log level, error and access files, `dnsLog` and address masking — written to memory by default, not to the drive.
 - 🎨 Built-in WebUI on port `80` with colour themes, no Clash API and no external dashboard.
 - 🔐 HTTP Basic Auth with an in-app `BASIC_AUTH_HASH` generator; the default login is `admin` / `admin`.
 - 💾 Profiles persist under `/etc/xray`; generated configurations, jobs, events and geodata stay in `/dev/shm`.
@@ -32,7 +36,7 @@
 1. Add a URL that returns a JSON array of complete Xray configurations. Saving a new or changed URL starts a download automatically.
 2. Remnawave headers, global and optionally per-profile, are sent with the request.
 3. The response body is stored as received, then the selected item is pinned by its SHA-256 fingerprint.
-4. Container fragments are merged through `-confdir`: geodata assets, log level, and the inbounds required by the interception mode.
+4. Container fragments are merged through `-confdir`: geodata assets, the log section, and the local and interception inbounds.
 5. The candidate is validated with `xray run -test` and becomes the runtime configuration only when validation succeeds.
 6. A failed update never stops a previously valid running configuration.
 7. The selected subscription and the run/stop state survive container restarts.
@@ -87,6 +91,22 @@ Route selected clients through the container:
 
 The container blocks gateway ICMP until Xray and the interception rules are ready, so `check-gateway=ping` gives fail-closed route health. Open the UI at `http://192.168.255.14/`.
 
+## 🖥 WebUI
+
+The panel is served by busybox `httpd` on port `80` and needs neither a Clash API nor an external dashboard. The Subscriptions page shows a card per profile: the state of the last update, HTTP status and response size, the list of configurations in the subscription with a health-check button on every row, and a "check all" button.
+
+A subscription's own settings open from its card: URL, refresh interval, timeout, TLS verification, and per-profile headers.
+
+![Subscription editor](/docs/screenshots/subscription-editor.png)
+
+The resulting runtime configuration and the provider's own JSON are available straight from the panel, with syntax highlighting.
+
+![Runtime configuration](/docs/screenshots/runtime-json.png)
+
+Settings are split into tabs: Headers, Inbound traffic, Alpine network, Xray core, Geodata, Appearance and Access. Appearance offers seven themes and a custom accent colour; the choice is stored in the container and applies to everyone opening the panel.
+
+![Settings - appearance](/docs/screenshots/settings-appearance.png)
+
 ## 🧾 Subscription Model
 
 This container consumes JSON subscriptions only. The response root must be a JSON array, and every array item is one complete Xray configuration:
@@ -111,10 +131,10 @@ The container does not extract the first proxy outbound and does not synthesize 
 Later `confdir` fragments only add:
 
 - the managed asset directory and default geodata when needed;
-- the local log level;
-- mixed port `1080` and the inbounds required by the interception mode.
+- the log section: level, error and access files, `dnsLog` and `maskAddress`;
+- whichever local SOCKS and HTTP inbounds are enabled, plus the inbounds required by the interception mode.
 
-Source inbounds are retained. Port conflicts with `80`, `1080`, REDIR, or TPROXY must be fixed in the subscription template.
+Source inbounds are handled by the rules described under "Inbounds, Theirs and Yours".
 
 Container-managed inbound tags are stable and reserved:
 
@@ -133,11 +153,13 @@ An authoritative empty response, HTTP `401/403/404/410/451`, or an explicit HWID
 
 ## 📨 Request Headers
 
-Remnawave picks the subscription format from the `User-Agent`, so the container sends a client header set by default: `x-hwid`, `x-device-os`, `x-ver-os`, `x-device-model` and `user-agent`. A value you set explicitly always wins over the substituted one.
+![Settings - headers](/docs/screenshots/settings-headers.png)
 
-The "Default headers" switch on the Requests tab turns that substitution off entirely. With it off, only the headers you entered yourself are sent: the panel drops untouched defaults from the list and keeps the ones you edited. This matters when a provider expects its own header set, or when a foreign `User-Agent` gets in the way.
+Remnawave picks the subscription format from the `User-Agent`, so the container sends a client header set: `x-hwid`, `x-device-os`, `x-ver-os`, `x-device-model` and `user-agent`. A value you set explicitly always wins over the substituted one.
 
-Per-profile headers take precedence over the global ones. Toggling the switch, like editing the headers themselves, triggers a fresh download of the active subscription, because the request is now a different one.
+Every row carries a send checkbox. Clearing it removes that header from the request entirely — for a required key that means its default is not sent either. The row itself is kept along with its value, so one checkbox brings it back without retyping anything.
+
+Per-profile headers take precedence over the global ones. Editing headers or clearing a checkbox triggers a fresh download of the active subscription, because the request is now a different one.
 
 ## ♻️ Core Restarts
 
@@ -154,6 +176,8 @@ What the container does own is the gap Xray leaves: if an asset file does not ex
 When the selected JSON already has `geodata`, its cron, assets and outbound are preserved. Otherwise the container adds the Loyalsoldier `geoip.dat` and `geosite.dat` releases with schedule `0 4 * * *` and outbound `direct`. If `direct` is unavailable or belongs to a non-`freedom` outbound, a tagged `freedom` is reused or a dedicated helper is appended without changing the original outbound order.
 
 Loyalsoldier URLs are verified against their adjacent `.sha256sum` files. Custom assets must use HTTPS, a safe relative path, and stay under 128 MiB per file.
+
+![Settings - geodata](/docs/screenshots/settings-geodata.png)
 
 | Storage | Directory | Behaviour |
 |---|---|---|
@@ -174,7 +198,35 @@ Health checks perform an HTTP request through the real outbound rather than a TC
 
 A short-lived isolated Xray keeps the full outbound array, so `sockopt.dialerProxy`, `proxySettings.tag`, and related dependencies continue to work. Check-all runs sequentially to limit RouterOS load.
 
+## 🧰 Inbounds, Theirs and Yours
+
+Interception here is built by the container's own rules, so inbounds carried by a subscription are of no use to it. `dokodemo-door`, `tunnel` and `tun` are **always** removed: a template carrying one would otherwise sit on the container's own ports. `socks` (along with its `mixed` alias) and `http` are removed by switches on the Xray core tab, both on by default — leaving a stranger's open proxy on a router should be a deliberate choice. Whatever is removed is named in the log.
+
+Your own local proxies are configured on the same tab and start **disabled**. SOCKS and HTTP are independent, so both can run at once, each with its own port, username and password. An empty username means no authentication. The two ports must differ, since Xray will not bind two listeners to one.
+
+![Settings - Xray core](/docs/screenshots/settings-xray.png)
+
+## 📝 Xray Logging
+
+The log level and the error and access files are set on the Xray core tab and merged in as their own fragment:
+
+```json
+{
+  "log": {
+    "loglevel": "warning",
+    "error": "/dev/stderr",
+    "access": "/dev/stdout",
+    "dnsLog": false,
+    "maskAddress": ""
+  }
+}
+```
+
+The `/dev/stderr` and `/dev/stdout` defaults send the log to the container stream, which is RouterOS `/log` and RAM. `none` turns a log off. A path on the drive is accepted, but writing logs there wears the router's flash exactly as geodata would, so it stays a deliberate choice. The DNS log switch sets `dnsLog`, and address masking sets `maskAddress: "quarter"`, which hides part of the IP and domain in the access log.
+
 ## 🔀 Interception Modes
+
+![Settings - inbound traffic](/docs/screenshots/settings-traffic.png)
 
 | Mode | TCP | UDP | Backend |
 |---|---|---|---|

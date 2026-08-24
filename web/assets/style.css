@@ -190,7 +190,10 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .main-nav button:focus-visible, .settings-tabs button:focus-visible, .mobile-nav button:focus-visible { outline: 0; box-shadow: inset 0 0 0 1px rgba(var(--primary-rgb), .58); }
 
 .subscription-list { display: grid; gap: 10px; }
-.subscription-card { overflow: hidden; border: 1px solid transparent; border-radius: 12px; background: var(--base-100); box-shadow: var(--shadow); transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+/* Граница в покое, а не только на hover: на тёмной теме карточку отделяла сама
+   разница яркости, а на светлой белая карточка на почти белом фоне без рамки
+   не читалась вовсе. */
+.subscription-card { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--base-100); box-shadow: var(--shadow); transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
 .subscription-card:hover { border-color: var(--border-hover); background: var(--card-hover); }
 .subscription-card.active { border-color: rgba(var(--primary-rgb), .48); box-shadow: inset 3px 0 0 var(--primary), var(--shadow); }
 .subscription-main { min-height: 76px; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 12px 12px 15px; }
@@ -255,7 +258,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .config-list { display: grid; border-top: 1px solid var(--border); }
 .config-row { min-width: 0; min-height: 58px; display: grid; grid-template-columns: minmax(0, 1fr) 92px; align-items: stretch; padding: 0 14px 0 65px; border-bottom: 1px solid var(--border); color: inherit; background: transparent; }
 .config-row:last-child { border-bottom: 0; }
-.config-row:hover { background: rgba(var(--overlay-rgb), .025); }
+.config-row:hover { background: var(--surface-hover); }
 .config-row.selected { background: rgba(var(--primary-rgb), .1); }
 .config-row-select { min-width: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr) 64px; align-items: center; gap: 11px; padding: 8px 12px 8px 0; border: 0; color: inherit; background: transparent; text-align: left; }
 .config-row-select:disabled { cursor: default; opacity: 1; }
@@ -608,8 +611,12 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   --muted: #5f6b59; --faint: #7d8a76; --placeholder: #97a291;
   --readonly-content: #56624f; --viewer-content: #2f3a2c;
 
-  --border: rgba(22, 33, 15, .12);
-  --border-hover: rgba(22, 33, 15, .26);
+  /* На тёмном фоне карточку отделяет уже сама разница яркости, а на светлом
+     белое на почти белом сливается — там держать границы приходится заметно
+     плотнее, иначе список подписок читается как сплошное полотно. */
+  --border: rgba(22, 33, 15, .19);
+  --border-hover: rgba(22, 33, 15, .36);
+  --shadow: 0 1px 2px rgba(22, 33, 15, .07), 0 6px 18px rgba(22, 33, 15, .07);
   --primary-hover: #416f2b; --primary-content: #ffffff;
   --success: #2f8a6f; --warning: #a9761b; --error: #c2382f;
   --danger: #c0392f; --danger-hover: #a5302a;

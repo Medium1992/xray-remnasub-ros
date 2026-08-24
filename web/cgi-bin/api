@@ -301,6 +301,13 @@ status_response() {
   else
     printf '[]\n' > "$status_configs"
   fi
+  status_probes=$RUNTIME_DIR/status-probes.$$.json
+  if [ -s "$STATUS_DIR/$ACTIVE_PROFILE_ID.probes.json" ] &&
+     jq -e 'type == "object"' "$STATUS_DIR/$ACTIVE_PROFILE_ID.probes.json" > /dev/null 2>&1; then
+    cp "$STATUS_DIR/$ACTIVE_PROFILE_ID.probes.json" "$status_probes" 2>/dev/null || printf '{}\n' > "$status_probes"
+  else
+    printf '{}\n' > "$status_probes"
+  fi
   tail -n 100 "$EVENT_LOG" > "$status_events" 2>/dev/null || : > "$status_events"
   running=false; xray_pid=$(cat "$RUNTIME_DIR/xray.pid" 2>/dev/null || true); valid_number "$xray_pid" && kill -0 "$xray_pid" 2>/dev/null && running=true
   # Версия ядра и доступность nftables определяются один раз при старте
@@ -357,7 +364,7 @@ EOF
   valid_number "$geodata_last_update" || geodata_last_update=0
   json_headers
   jq -n \
-    --slurpfile profiles "$status_profiles" --slurpfile configs "$status_configs" --rawfile events "$status_events" --arg active "$ACTIVE_PROFILE_ID" \
+    --slurpfile profiles "$status_profiles" --slurpfile configs "$status_configs" --slurpfile probes "$status_probes" --rawfile events "$status_events" --arg active "$ACTIVE_PROFILE_ID" \
     --argjson run_enabled "$RUN_ENABLED" --argjson running "$running" --arg listener_mode "$LISTENER_MODE" \
     --argjson redir "$REDIR_PORT" --argjson tproxy "$TPROXY_PORT" --arg log_level "$LOG_LEVEL" \
     --arg xray_log_error "$XRAY_LOG_ERROR" --arg xray_log_access "$XRAY_LOG_ACCESS" \
@@ -373,10 +380,11 @@ EOF
     --argjson geodata_total_bytes "$geodata_total_bytes" --argjson geodata_last_update "$geodata_last_update" --arg geodata_warning "$geodata_warning" \
     --arg backend "$backend" --arg active_interface "$active_interface" --arg active_interface_cidr "$active_interface_cidr" --arg effective_listener_mode "$effective_listener_mode" --arg version "$xray_version" \
     --arg ui_theme "$UI_THEME" --arg ui_accent "$UI_ACCENT" \
-    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
+    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
   status_result=$?
   rm -f "$status_profiles" "$status_events"
   [ "$status_configs" = "$active_configs" ] || rm -f "$status_configs"
+  rm -f "$status_probes"
   return "$status_result"
 }
 
@@ -723,8 +731,17 @@ EOF
          jq -e 'type == "object"' "$probe_metrics_tmp" >/dev/null 2>&1; then
         mv "$probe_metrics_tmp" "$probe_metrics"
         probe_metrics_ready=1
+        # Достаточно одного живого outbound: конфигурация уже доказала, что
+        # работает, а ждать отчёта от всех остальных — это ровно то время,
+        # которое проверка и съедала. Если живых пока нет, ждём дальше, пока
+        # не отчитаются все или не выйдет таймаут.
         probe_seen=$(jq -r --arg prefix "$probe_target_prefix" '((.observatory // {}) | to_entries | map(select(.key | startswith($prefix))) | length)' "$probe_metrics" 2>/dev/null)
         valid_number "$probe_seen" || probe_seen=0
+        if jq -e --arg prefix "$probe_target_prefix" \
+             'any((.observatory // {}) | to_entries[]; (.key | startswith($prefix)) and .value.alive == true)' \
+             "$probe_metrics" >/dev/null 2>&1; then
+          break
+        fi
         [ "$probe_seen" -lt "$probe_total" ] || break
       fi
       kill -0 "$PROBE_XRAY_PID" 2>/dev/null || break
@@ -741,6 +758,31 @@ EOF
     probe_delay=$(printf '%s' "$probe_result" | jq -c '.delay_ms')
     valid_number "$probe_alive" || probe_alive=0
     [ "$probe_alive" -gt 0 ] && probe_reachable=true || probe_reachable=false
+    # Результат кладётся в /dev/shm, а не только в память вкладки: обновление
+    # страницы не должно стирать проверки. Ключ — отпечаток конфигурации,
+    # поэтому после смены подписки старые результаты сами перестают
+    # подходить. Хранилище оперативное: переживать перезапуск контейнера
+    # проверкам незачем.
+    probe_store=$STATUS_DIR/$id.probes.json
+    probe_store_tmp=$probe_store.tmp.$$
+    probe_store_previous=$PROBE_TEMP_DIR/probes-previous.json
+    if [ -s "$probe_store" ] && jq -e 'type == "object"' "$probe_store" >/dev/null 2>&1; then
+      cp "$probe_store" "$probe_store_previous" 2>/dev/null || printf '{}\n' > "$probe_store_previous"
+    else
+      printf '{}\n' > "$probe_store_previous"
+    fi
+    if jq -n --slurpfile previous "$probe_store_previous" \
+        --arg fingerprint "$probe_actual_fingerprint" --argjson delay "$probe_delay" \
+        --arg method "$probe_method" --arg source "$probe_source_kind" --argjson at "$(date +%s)" '
+        (($previous[0] // {}) | if type == "object" then . else {} end)
+        + {($fingerprint): {delay_ms:$delay,method:$method,source:$source,at:$at}}
+        | to_entries | sort_by(-.value.at)[0:64] | from_entries
+      ' > "$probe_store_tmp" 2>/dev/null; then
+      chmod 600 "$probe_store_tmp" 2>/dev/null || true
+      mv "$probe_store_tmp" "$probe_store" 2>/dev/null || rm -f "$probe_store_tmp"
+    else
+      rm -f "$probe_store_tmp"
+    fi
     probe_cleanup
     trap - 0 HUP INT TERM
     json_headers

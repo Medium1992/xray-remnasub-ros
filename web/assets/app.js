@@ -416,6 +416,7 @@
       configs: model.configs,
       busy: Array.from(ui.busy).sort(),
       probes: Array.from(ui.probes.entries()),
+      storedProbes: model.probes,
     });
     if (fingerprint === cardsFingerprint) return;
     cardsFingerprint = fingerprint;
@@ -473,11 +474,13 @@
         : Number(config.index) === Number(profile.selected_config_index);
       const description = config.description && config.description !== config.name ? `<small>${escapeHtml(config.description)}</small>` : "";
       const probeKey = `${profile.id}:${config.fingerprint || config.index}`;
-      const probe = ui.probes.get(probeKey);
+      // Локальное состояние важнее сохранённого: пока проверка идёт, показываем
+      // именно её, а не прошлый результат из контейнера.
+      const probe = ui.probes.get(probeKey) || (model.probes || {})[config.fingerprint] || undefined;
       const alive = Number(probe?.alive);
       const total = Number(probe?.total);
       const delay = probe?.delay_ms == null ? Number.NaN : Number(probe.delay_ms);
-      const hasResult = probe && !probe.pending && Number.isFinite(alive) && Number.isFinite(total);
+      const hasResult = probe && !probe.pending && !probe.error && (Number.isFinite(delay) || Number.isFinite(alive));
       let probeLabel = "HTTP";
       let probeClass = "";
       if (probe?.pending) {
@@ -487,9 +490,11 @@
         probeLabel = "ошибка";
         probeClass = " unreachable";
       } else if (hasResult) {
-        probeLabel = `${Number.isFinite(delay) && delay >= 0 ? `${Math.round(delay)} ms` : "нет связи"} · ${Math.max(0, alive)}/${Math.max(0, total)}`;
-        if (total > 0 && alive === total) probeClass = " reachable";
-        else if (alive === 0) probeClass = " unreachable";
+        // Проверка останавливается на первом живом outbound, поэтому счётчик
+        // вида 1/1 ничего не сообщает и в подписи не показывается.
+        const reachable = Number.isFinite(delay) && delay >= 0;
+        probeLabel = reachable ? `${Math.round(delay)} ms` : "нет связи";
+        probeClass = reachable ? " reachable" : " unreachable";
       }
       const probeMethod = String(probe?.method || model.xray_probe_http_method || "HEAD").toUpperCase();
       const probeSource = probe?.source ? ` · источник: ${probe.source}` : "";
@@ -741,6 +746,11 @@
     renderRuntime();
     renderSubscriptions();
     renderSettings(forceSettings);
+    // Сводка geodata только читается и ни к какому полю формы не привязана,
+    // поэтому обновляется всегда. Внутри renderSettings она попадала под флаг
+    // settingsDirty: стоило тронуть любую настройку — и размер с временем
+    // файлов замирали до сохранения или перезагрузки страницы.
+    updateGeodataFields();
     renderActionStates();
     if (ui.editorProfileId) {
       const editorProfile = profileById(ui.editorProfileId);

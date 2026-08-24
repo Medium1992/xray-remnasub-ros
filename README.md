@@ -184,7 +184,7 @@ A short-lived isolated Xray keeps the full outbound array, so `sockopt.dialerPro
 
 RouterOS gained nftables in the kernel with 7.21, and only on `arm64` and `amd64`. There `auto` picks REDIR + TPROXY. On older releases, and on `armv7` and `armv5`, the kernel has no nftables and interception runs on iptables-legacy in REDIR + TUN.
 
-Alpine's `iptables` is built on nftables and does not work on a kernel without `nf_tables`, so at startup the container checks for the module and, when it is missing, repoints `iptables`, `iptables-save` and `iptables-restore` at the legacy binaries. The packages are already in the image; nothing is downloaded. Cleanup only removes container-owned tables, chains, routes, and policy rules.
+To keep the image small, `iptables` is not shipped in the `arm64` and `amd64` builds: it is only needed on firmware older than 7.21. At startup the container checks for the `nf_tables` module and, when it is missing, installs `iptables` and `iptables-legacy` through `apk` and repoints the standard names at the legacy binaries. The `armv7` build carries them outright, and the `armv5` rootfs already contains them. Cleanup only removes container-owned tables, chains, routes, and policy rules.
 
 MPTCP cannot be intercepted, so both backends drop TCP option 30 on the LAN interface and clients fall back to plain TCP. nftables does this in its own chain; iptables uses `mangle` `PREROUTING`, because `DROP` is not allowed in the `nat` table.
 

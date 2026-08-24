@@ -30,26 +30,49 @@ nft_available() {
   command -v nft >/dev/null 2>&1 && nft list tables >/dev/null 2>&1
 }
 
+# Проба сохраняет причину отказа: без неё auto молча уходил в redir-tun, и
+# понять, чего именно не хватает ядру — nft_tproxy, nft_socket или самого
+# nftables, — было нельзя.
+NFT_PROBE_ERROR=
 nft_tproxy_available() {
-  nft_available || return 1
-  printf '%s\n' \
+  NFT_PROBE_ERROR=
+  if ! command -v nft >/dev/null 2>&1; then
+    NFT_PROBE_ERROR='nft is not installed in this image'
+    return 1
+  fi
+  if ! nft list tables >/dev/null 2>&1; then
+    NFT_PROBE_ERROR='the kernel does not accept nftables commands'
+    return 1
+  fi
+  NFT_PROBE_ERROR=$(printf '%s\n' \
     'add table inet xray_remnasub_probe' \
     'add chain inet xray_remnasub_probe prerouting { type filter hook prerouting priority filter; policy accept; }' \
     'add rule inet xray_remnasub_probe prerouting meta mark 4294967295 meta l4proto udp tproxy ip to 127.0.0.1:1 accept' \
     'add chain inet xray_remnasub_probe divert { type filter hook prerouting priority mangle -1; policy accept; }' \
     'add rule inet xray_remnasub_probe divert meta l4proto udp socket transparent 1 meta mark set 4294967295 accept' \
-    'delete table inet xray_remnasub_probe' | nft --check -f - >/dev/null 2>&1
+    'delete table inet xray_remnasub_probe' | nft --check -f - 2>&1 >/dev/null) && return 0
+  [ -n "$NFT_PROBE_ERROR" ] || NFT_PROBE_ERROR='the kernel rejected the TPROXY probe ruleset'
+  return 1
 }
 
 resolve_mode() {
   case "$mode" in
-    auto) nft_tproxy_available && printf 'redir-tproxy\n' || printf 'redir-tun\n' ;;
+    auto)
+      if nft_tproxy_available; then
+        printf 'redir-tproxy\n'
+      else
+        echo "auto: REDIR+TPROXY is unavailable, falling back to REDIR+TUN — $NFT_PROBE_ERROR" >&2
+        printf 'redir-tun\n'
+      fi
+      ;;
     tproxy|redir-tproxy)
       if nft_tproxy_available; then
         printf '%s\n' "$mode"
       elif [ "$strict" = 1 ]; then
+        echo "$mode is unavailable — $NFT_PROBE_ERROR" >&2
         return 1
       else
+        echo "$mode is unavailable, falling back to REDIR+TUN — $NFT_PROBE_ERROR" >&2
         printf 'redir-tun\n'
       fi
       ;;

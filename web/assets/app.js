@@ -276,25 +276,29 @@
     ["user-agent", "Happ/4.0.1/Android/35"],
   ];
 
+  // Выключенный заголовок хранится той же строкой с ведущей решёткой: значение
+  // не теряется, и галочку можно вернуть, ничего не набирая заново.
   function parseHeaders(raw) {
     return String(raw || "").split(/\r?\n/).map((line) => {
-      const separator = line.indexOf(":");
+      const enabled = !/^\s*#/.test(line);
+      const body = enabled ? line : line.replace(/^\s*#/, "");
+      const separator = body.indexOf(":");
       if (separator < 1) return null;
-      return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
+      return [body.slice(0, separator).trim(), body.slice(separator + 1).trim(), enabled];
     }).filter(Boolean);
   }
 
-  function headerRow(name = "", value = "", locked = false) {
-    return `<div class="header-row"><input type="text" data-header-key value="${escapeHtml(name)}" placeholder="X-Header" pattern="[A-Za-z0-9-]+" maxlength="128"${locked ? " readonly" : ""}><input type="text" data-header-value value="${escapeHtml(value)}" placeholder="Значение" maxlength="2048">${locked ? `<span class="header-lock" title="Обязательный заголовок">${icon("lock")}</span>` : `<button class="icon-button danger" type="button" data-remove-header title="Удалить заголовок">${icon("trash")}</button>`}</div>`;
+  function headerRow(name = "", value = "", locked = false, enabled = true) {
+    return `<div class="header-row"><label class="header-toggle" title="Отправлять этот заголовок"><input type="checkbox" data-header-enabled${enabled ? " checked" : ""}><i></i></label><input type="text" data-header-key value="${escapeHtml(name)}" placeholder="X-Header" pattern="[A-Za-z0-9-]+" maxlength="128"${locked ? " readonly" : ""}><input type="text" data-header-value value="${escapeHtml(value)}" placeholder="Значение" maxlength="2048">${locked ? `<span class="header-lock" title="Обязательный заголовок">${icon("lock")}</span>` : `<button class="icon-button danger" type="button" data-remove-header title="Удалить заголовок">${icon("trash")}</button>`}</div>`;
   }
 
   function renderHeaders(containerId, raw, includeRequired = false) {
     const parsed = parseHeaders(raw);
     const requiredNames = new Set(requiredHeaders.map(([name]) => name));
     const headers = includeRequired
-      ? requiredHeaders.map(([name, fallback]) => parsed.find(([key]) => key.toLowerCase() === name) || [name, fallback]).concat(parsed.filter(([key]) => !requiredNames.has(key.toLowerCase())))
+      ? requiredHeaders.map(([name, fallback]) => parsed.find(([key]) => key.toLowerCase() === name) || [name, fallback, true]).concat(parsed.filter(([key]) => !requiredNames.has(key.toLowerCase())))
       : parsed;
-    $(containerId).innerHTML = headers.map(([name, value]) => headerRow(name, value, includeRequired && requiredNames.has(name.toLowerCase()))).join("");
+    $(containerId).innerHTML = headers.map(([name, value, enabled]) => headerRow(name, value, includeRequired && requiredNames.has(name.toLowerCase()), enabled !== false)).join("");
   }
 
   function appendHeader(containerId) {
@@ -307,7 +311,8 @@
     return all(".header-row", $(containerId)).map((row) => {
       const name = row.querySelector("[data-header-key]").value.trim();
       const value = row.querySelector("[data-header-value]").value.trim();
-      return name ? `${name}: ${value}` : "";
+      const enabled = row.querySelector("[data-header-enabled]")?.checked !== false;
+      return name ? `${enabled ? "" : "#"}${name}: ${value}` : "";
     }).filter(Boolean).join("\n");
   }
 
@@ -344,8 +349,12 @@
       const checked = entry.id === selectedTheme;
       return `<button class="theme-card" type="button" role="radio" aria-checked="${checked ? "true" : "false"}" data-theme-id="${escapeHtml(entry.id)}" data-theme="${escapeHtml(resolved)}"><span class="theme-preview"><i></i><span><em></em><em></em></span></span><strong>${escapeHtml(entry.label)}</strong></button>`;
     }).join("");
+    // Цвет проставляется через CSSOM, а не атрибутом style: страница отдаётся с
+    // CSP `style-src 'self'`, поэтому инлайн-стиль браузер отбрасывает и
+    // образцы остаются бесцветными.
     $("accent-presets").innerHTML = theme.ACCENT_PRESETS.map((colour) =>
-      `<button type="button" data-accent="${escapeHtml(colour)}" style="background:${escapeHtml(colour)}" aria-pressed="${colour.toLowerCase() === selectedAccent.toLowerCase() ? "true" : "false"}" title="${escapeHtml(colour)}" aria-label="Акцент ${escapeHtml(colour)}"></button>`).join("");
+      `<button type="button" data-accent="${escapeHtml(colour)}" aria-pressed="${colour.toLowerCase() === selectedAccent.toLowerCase() ? "true" : "false"}" title="${escapeHtml(colour)}" aria-label="Акцент ${escapeHtml(colour)}"></button>`).join("");
+    all("[data-accent]", $("accent-presets")).forEach((button) => { button.style.background = button.dataset.accent; });
     $("accent-color").value = selectedAccent || "#9bd45a";
     $("accent-reset").disabled = !selectedAccent;
   }
@@ -491,8 +500,8 @@
 
   function settingsStateSignature() {
     return JSON.stringify([
-      model.global_headers_b64, model.default_headers, model.listener_mode, model.effective_listener_mode, model.firewall_backend, model.redir_port, model.tproxy_port,
-      model.log_level,
+      model.global_headers_b64, model.listener_mode, model.effective_listener_mode, model.firewall_backend, model.redir_port, model.tproxy_port,
+      model.log_level, model.xray_log_error, model.xray_log_access, model.xray_log_dns, model.xray_log_mask_address,
       model.network_qdisc, model.network_disable_ipv6, model.network_disable_multicast,
       model.network_ct_established, model.network_ct_unacknowledged, model.network_ct_syn_sent,
       model.network_ct_syn_recv, model.network_ct_fin_wait, model.network_ct_close_wait,
@@ -555,8 +564,7 @@
     const fingerprint = settingsStateSignature();
     if (!force && (ui.settingsDirty || fingerprint === settingsFingerprint)) return;
     settingsFingerprint = fingerprint;
-    $("global-default-headers").checked = Number(model.default_headers ?? 1) !== 0;
-    renderHeaders("global-header-rows", decode(model.global_headers_b64), $("global-default-headers").checked);
+    renderHeaders("global-header-rows", decode(model.global_headers_b64), true);
     all('input[name="listener-mode"]').forEach((input) => { input.checked = input.value === (model.listener_mode || "auto"); });
     $("redir-port").value = model.redir_port ?? 12345;
     $("tproxy-port").value = model.tproxy_port ?? 12346;
@@ -564,6 +572,10 @@
     $("network-ipv6").checked = Number(model.network_disable_ipv6 ?? 1) === 0;
     $("network-multicast").checked = Number(model.network_disable_multicast ?? 1) === 0;
     $("xray-log-level").value = model.log_level || "warning";
+    $("xray-log-error").value = model.xray_log_error || "/dev/stderr";
+    $("xray-log-access").value = model.xray_log_access || "/dev/stdout";
+    $("xray-log-dns").checked = enabled(model.xray_log_dns);
+    $("xray-log-mask-address").checked = enabled(model.xray_log_mask_address);
     $("xray-sniffing-enabled").checked = Number(model.xray_sniffing_enabled ?? 1) !== 0;
     $("xray-sniffing-route-only").checked = Number(model.xray_sniffing_route_only ?? 0) !== 0;
     $("xray-probe-url").value = model.xray_probe_url || "https://www.gstatic.com/generate_204";
@@ -898,11 +910,14 @@
       await api("save-settings", {
         global_headers_present: "1",
         global_headers: collectHeaders("global-header-rows"),
-        default_headers: $("global-default-headers").checked ? "1" : "0",
         listener_mode: listenerMode,
         redir_port: $("redir-port").value,
         tproxy_port: $("tproxy-port").value,
         log_level: $("xray-log-level").value,
+        xray_log_error: $("xray-log-error").value.trim(),
+        xray_log_access: $("xray-log-access").value.trim(),
+        xray_log_dns: $("xray-log-dns").checked ? "1" : "0",
+        xray_log_mask_address: $("xray-log-mask-address").checked ? "1" : "0",
         network_qdisc: $("network-qdisc").value,
         network_disable_ipv6: $("network-ipv6").checked ? "0" : "1",
         network_disable_multicast: $("network-multicast").checked ? "0" : "1",
@@ -1068,14 +1083,6 @@
   // из модели: иначе несохранённые правки пропали бы. Выключение убирает
   // обязательные строки, поэтому после сохранения они исчезают и из состояния,
   // и подставлять их будет уже нечему.
-  $("global-default-headers").addEventListener("change", (event) => {
-    const enabled = event.target.checked;
-    const fallbacks = new Map(requiredHeaders);
-    const kept = parseHeaders(collectHeaders("global-header-rows"))
-      .filter(([key, value]) => enabled || fallbacks.get(key.toLowerCase()) !== value);
-    renderHeaders("global-header-rows", kept.map(([key, value]) => `${key}: ${value}`).join("\n"), enabled);
-    ui.settingsDirty = true;
-  });
   $("add-global-header").addEventListener("click", () => {
     appendHeader("global-header-rows");
     ui.settingsDirty = true;

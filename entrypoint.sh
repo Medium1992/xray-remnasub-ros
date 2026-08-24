@@ -48,8 +48,8 @@ initialize_storage() {
     create_profile "$first"
   fi
   if [ ! -f "$STATE" ]; then
-    ACTIVE_PROFILE_ID=$first RUN_ENABLED=0 GLOBAL_HEADERS_B64= DEFAULT_HEADERS=1 LISTENER_MODE=auto REDIR_PORT=12345 TPROXY_PORT=12346
-    LOG_LEVEL=warning
+    ACTIVE_PROFILE_ID=$first RUN_ENABLED=0 GLOBAL_HEADERS_B64= LISTENER_MODE=auto REDIR_PORT=12345 TPROXY_PORT=12346
+    LOG_LEVEL=warning XRAY_LOG_ERROR=/dev/stderr XRAY_LOG_ACCESS=/dev/stdout XRAY_LOG_DNS=0 XRAY_LOG_MASK_ADDRESS=0
     NETWORK_DISABLE_IPV6=1 NETWORK_DISABLE_MULTICAST=1 NETWORK_QDISC=fq_codel
     NETWORK_CT_ESTABLISHED=86400 NETWORK_CT_SYN_SENT=5 NETWORK_CT_SYN_RECV=5
     NETWORK_CT_FIN_WAIT=10 NETWORK_CT_CLOSE_WAIT=10 NETWORK_CT_LAST_ACK=10
@@ -84,7 +84,7 @@ effective_headers() {
   load_settings
   header_global=$RUNTIME_DIR/request-global.$$.headers
   header_local=$RUNTIME_DIR/request-local.$$.headers
-  b64_decode "$GLOBAL_HEADERS_B64" | awk -v defaults="$DEFAULT_HEADERS" '
+  b64_decode "$GLOBAL_HEADERS_B64" | awk '
     BEGIN {
       count=5
       order[1]="x-hwid"
@@ -101,6 +101,11 @@ effective_headers() {
     {
       line=$0
       sub(/\r$/, "", line)
+      # Строка, начинающаяся с решётки, выключена пользователем: она хранится
+      # вместе с остальными, чтобы значение можно было вернуть галочкой, но в
+      # запрос не попадает.
+      off=0
+      if (sub(/^[[:space:]]*#/, "", line)) off=1
       separator=index(line, ":")
       if (separator < 2) next
       key=substr(line, 1, separator - 1)
@@ -108,17 +113,16 @@ effective_headers() {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
       normalized=tolower(key)
-      if (normalized in fallback) {supplied[normalized]=value; seen[normalized]=1}
-      else if (key ~ /^[A-Za-z0-9-]+$/) custom[++custom_count]=key ": " value
+      if (normalized in fallback) {supplied[normalized]=value; seen[normalized]=1; disabled[normalized]=off}
+      else if (key ~ /^[A-Za-z0-9-]+$/ && !off) custom[++custom_count]=key ": " value
     }
     END {
-      # При выключенных значениях по умолчанию обязательные ключи не
-      # подставляются: уходят только те, что пользователь задал явно.
+      # Обязательный ключ уходит со значением пользователя, а если тот его не
+      # задавал — со значением по умолчанию. Снятая галочка убирает его совсем.
       for (i=1; i<=count; i++) {
         key=order[i]
-        if (seen[key] && supplied[key] != "") value=supplied[key]
-        else if (defaults == 1) value=fallback[key]
-        else continue
+        if (disabled[key]) continue
+        value=(seen[key] && supplied[key] != "") ? supplied[key] : fallback[key]
         print key ": " value
       }
       for (i=1; i<=custom_count; i++) print custom[i]

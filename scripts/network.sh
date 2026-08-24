@@ -11,8 +11,6 @@ tproxy_table=100
 tun_table=110
 tun=Xray
 tun_gateway=100.64.0.1
-TPROXY_FLAG_DIR=${XRAY_RUNTIME_DIR:-/dev/shm/xray-remnasub}
-TPROXY_FLAG=$TPROXY_FLAG_DIR/tproxy.unavailable
 
 resolve_interface() {
   requested=${ROUTE_IFACE:-${NETWORK_INTERFACE:-auto}}
@@ -36,16 +34,9 @@ nft_available() {
   nft list tables >/dev/null 2>&1
 }
 
-# Наличие nf_tables ещё не значит, что ядро примет TPROXY: на части прошивок
-# RouterOS модуль есть, а правило с tproxy не применяется. Считать одно за
-# другое нельзя — тогда режим разрешается в redir-tproxy, apply падает на
-# первом же правиле и роутер остаётся вообще без правил перехвата.
-#
-# Проба применяется по-настоящему, а не через `nft --check`: только фактическое
-# применение отвечает на вопрос честно. Правило намеренно висит на метке
-# 4294967295, которой не бывает у настоящих пакетов, поэтому за те миллисекунды,
-# что таблица существует, оно ни во что не попадает. Таблица удаляется сразу,
-# и до, и после — на случай, если прошлый запуск был убит на середине.
+# Либо в ядре есть nf_tables, либо его нет — та же проверка, что в остальных
+# контейнерах на этом роутере. Наличие nf_tables означает и TPROXY: отдельной
+# пробы возможностей здесь не делается.
 NFT_PROBE_ERROR=
 nft_tproxy_available() {
   NFT_PROBE_ERROR=
@@ -53,26 +44,8 @@ nft_tproxy_available() {
     NFT_PROBE_ERROR='nft is not installed in this image'
     return 1
   fi
-  if ! nft_available; then
-    NFT_PROBE_ERROR='the kernel has no nf_tables support'
-    return 1
-  fi
-  if [ -f "$TPROXY_FLAG" ]; then
-    NFT_PROBE_ERROR=$(head -n 1 "$TPROXY_FLAG" 2>/dev/null || printf 'TPROXY failed earlier on this router')
-    return 1
-  fi
-  nft delete table inet xray_remnasub_probe 2>/dev/null || true
-  NFT_PROBE_ERROR=$({
-    nft add table inet xray_remnasub_probe &&
-    nft add chain inet xray_remnasub_probe prerouting '{ type filter hook prerouting priority filter; policy accept; }' &&
-    nft add rule inet xray_remnasub_probe prerouting meta mark 4294967295 meta l4proto udp tproxy ip to 127.0.0.1:1 accept &&
-    nft add chain inet xray_remnasub_probe divert '{ type filter hook prerouting priority mangle - 1; policy accept; }' &&
-    nft add rule inet xray_remnasub_probe divert meta mark 4294967295 meta l4proto udp socket transparent 1 accept
-  } 2>&1 >/dev/null)
-  nft_probe_rc=$?
-  nft delete table inet xray_remnasub_probe 2>/dev/null || true
-  [ "$nft_probe_rc" = 0 ] && return 0
-  [ -n "$NFT_PROBE_ERROR" ] || NFT_PROBE_ERROR='the kernel refused a TPROXY rule'
+  nft_available && return 0
+  NFT_PROBE_ERROR='the kernel has no nf_tables support'
   return 1
 }
 
@@ -284,28 +257,6 @@ esac
 route_cleanup
 mode=$(resolve_mode) || { echo "unsupported listener mode: $mode" >&2; exit 1; }
 
-# Скрипт идёт под set -e, поэтому отказ любого правила обрывает применение на
-# середине. Раньше это оставляло роутер вообще без правил перехвата, а ICMP к
-# gateway — заблокированным, и так по кругу. Ловим такой обрыв: чистим за
-# собой и, если не удался именно TPROXY, оставляем отметку. Она заставит
-# следующий resolve выбрать REDIR+TUN, контейнер пересоберёт конфигурацию под
-# него, и перехват поднимется, пусть и в более простом режиме. Отметка живёт в
-# /dev/shm и исчезает с перезапуском контейнера, так что смена прошивки её не
-# переживёт.
-apply_failed() {
-  apply_rc=$?
-  [ "$apply_rc" != 0 ] || return 0
-  case "$mode" in
-    tproxy|redir-tproxy)
-      mkdir -p "$TPROXY_FLAG_DIR" 2>/dev/null || true
-      printf 'the kernel refused %s rules on this router\n' "$mode" > "$TPROXY_FLAG" 2>/dev/null || true
-      echo "recorded that $mode is unusable here; the next apply will use REDIR+TUN" >&2
-      ;;
-  esac
-  route_cleanup
-}
-trap apply_failed EXIT
-
 case "$mode" in
   tproxy) apply_tproxy ;;
   redir-tproxy) apply_redir_tproxy ;;
@@ -319,19 +270,4 @@ case "$mode" in
     ;;
 esac
 
-trap - EXIT
-# Слепок того, что реально оказалось в ядре. Без него «правила не создались»
-# и «правила создались, но не работают» выглядят в журнале одинаково — никак.
-{
-  echo "--- applied $mode on $iface ($iface_cidr) ---"
-  if command -v nft >/dev/null 2>&1; then
-    nft list table inet xray_remnasub 2>&1 || echo '(no inet xray_remnasub table)'
-    nft list table ip xray_remnasub_output 2>&1 || true
-  fi
-  if command -v "$IPTABLES_COMMAND" >/dev/null 2>&1; then
-    "$IPTABLES_COMMAND" -t nat -S XRAY_REMNA_PREROUTING 2>&1 || echo '(no nat chain)'
-    "$IPTABLES_COMMAND" -t mangle -S XRAY_REMNA_MANGLE_PRE 2>&1 || true
-  fi
-  ip rule show 2>&1 || true
-} >&2
 printf '%s\n' "$mode"

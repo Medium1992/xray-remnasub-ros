@@ -27,12 +27,16 @@ resolve_interface() {
 }
 
 nft_available() {
-  command -v nft >/dev/null 2>&1 && nft list tables >/dev/null 2>&1
+  command -v nft >/dev/null 2>&1 || return 1
+  lsmod 2>/dev/null | grep -q nf_tables && return 0
+  # Модуль может быть вкомпилирован в ядро и тогда в lsmod его нет — в этом
+  # случае решает то, принимает ли ядро команды nftables.
+  nft list tables >/dev/null 2>&1
 }
 
-# Проба сохраняет причину отказа: без неё auto молча уходил в redir-tun, и
-# понять, чего именно не хватает ядру — nft_tproxy, nft_socket или самого
-# nftables, — было нельзя.
+# Либо в ядре есть nf_tables, либо его нет — та же проверка, что в остальных
+# контейнерах на этом роутере. Наличие nf_tables означает и TPROXY: отдельной
+# пробы возможностей здесь не делается.
 NFT_PROBE_ERROR=
 nft_tproxy_available() {
   NFT_PROBE_ERROR=
@@ -40,21 +44,8 @@ nft_tproxy_available() {
     NFT_PROBE_ERROR='nft is not installed in this image'
     return 1
   fi
-  if ! nft list tables >/dev/null 2>&1; then
-    NFT_PROBE_ERROR='the kernel does not accept nftables commands'
-    return 1
-  fi
-  NFT_PROBE_ERROR=$(printf '%s\n' \
-    'add table inet xray_remnasub_probe' \
-    'add chain inet xray_remnasub_probe prerouting { type filter hook prerouting priority filter; policy accept; }' \
-    'add rule inet xray_remnasub_probe prerouting meta mark 4294967295 meta l4proto udp tproxy ip to 127.0.0.1:1 accept' \
-    'add chain inet xray_remnasub_probe divert { type filter hook prerouting priority mangle -1; policy accept; }' \
-    'add rule inet xray_remnasub_probe divert meta l4proto udp socket transparent 1 meta mark set 4294967295 accept' \
-    | nft --check -f - 2>&1 >/dev/null) && return 0
-  # delete table в конце пачки убран намеренно: при --check транзакция и так
-  # не коммитится, а удаление только что добавленной таблицы часть версий nft
-  # отвергает, и проба падала не из-за отсутствия TPROXY в ядре.
-  [ -n "$NFT_PROBE_ERROR" ] || NFT_PROBE_ERROR='the kernel rejected the TPROXY probe ruleset'
+  nft_available && return 0
+  NFT_PROBE_ERROR='the kernel has no nf_tables support'
   return 1
 }
 

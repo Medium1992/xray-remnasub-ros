@@ -131,7 +131,16 @@ event_log() {
   event_level=$1 event_scope=$2
   shift 2
   event_text=$(printf '%s' "$*" | tr '\r\n' '  ' | head -c 2048)
-  printf '[%s] [%s] [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$event_level" "$event_scope" "$event_text" >> "$EVENT_LOG"
+  event_line=$(printf '[%s] [%s] [%s] %s' "$(date '+%Y-%m-%d %H:%M:%S')" "$event_level" "$event_scope" "$event_text")
+  printf '%s\n' "$event_line" >> "$EVENT_LOG"
+  # Дублируем в stdout контейнера: RouterOS показывает именно его в /log, и без
+  # этого в журнале роутера не было ничего, кроме строки запуска. Панель читает
+  # файл, роутер — поток, содержимое одинаковое.
+  #
+  # Кроме CGI: там stdout — это тело HTTP-ответа, и строка журнала попала бы
+  # прямо в JSON. busybox httpd выставляет GATEWAY_INTERFACE, по нему и
+  # отличаем.
+  [ -n "${GATEWAY_INTERFACE:-}" ] || [ -n "${REQUEST_METHOD:-}" ] || printf '%s\n' "$event_line"
   event_size=$(wc -c < "$EVENT_LOG" 2>/dev/null || printf 0)
   if valid_number "$event_size" && [ "$event_size" -gt 262144 ]; then
     tail -c 131072 "$EVENT_LOG" > "$EVENT_LOG.tmp.$$" && mv "$EVENT_LOG.tmp.$$" "$EVENT_LOG"
@@ -937,6 +946,7 @@ build_xray_config() {
   fi
 
   build_geodata_log=$build_metadata/geodata.prepare.log
+  event_log INFO "$build_id" 'preparing geodata assets'
   if ! /scripts/geodata.sh prepare \
        "$BUILD_CANDIDATE_DIR/10-subscription.json" \
        "$BUILD_CANDIDATE_DIR/70-container-geodata-tail.json" \
@@ -948,6 +958,7 @@ build_xray_config() {
     discard_build_candidate
     return 1
   fi
+  event_log INFO "$build_id" "geodata ready in $(jq -r '.asset_dir // "?"' "$build_metadata/geodata.json" 2>/dev/null)"
   rm -f "$build_geodata_log"
   build_asset_dir=$(jq -r '.asset_dir // empty' "$build_metadata/geodata.json" 2>/dev/null || true)
   case "$GEODATA_STORAGE:$build_asset_dir" in
@@ -1004,6 +1015,7 @@ build_xray_config() {
   chmod 700 "$BUILD_CANDIDATE_DIR" "$build_metadata" 2>/dev/null || true
   chmod 600 "$BUILD_CANDIDATE_DIR/10-subscription.json" "$BUILD_CANDIDATE_DIR/70-container-geodata-tail.json" "$BUILD_CANDIDATE_DIR/80-container-log.json" "$BUILD_CANDIDATE_DIR/90-container-inbounds.json" "$build_metadata/configs.json" "$build_metadata/geodata.json" "$build_metadata/listener.json" "$build_metadata/source.sha256" 2>/dev/null || true
 
+  event_log INFO "$build_id" 'validating the assembled configuration with xray run -test'
   if ! XRAY_LOCATION_ASSET="$build_asset_dir" xray run -test -confdir "$BUILD_CANDIDATE_DIR" > "$build_validation" 2>&1; then
     BUILD_ERROR=$(tail -n 20 "$build_validation" | tr '\n' ' ' | head -c 4096)
     [ -n "$BUILD_ERROR" ] || BUILD_ERROR='Xray rejected the selected configuration'

@@ -222,6 +222,35 @@ atomic_json() {
   cp "$json_source" "$json_temp" && chmod 600 "$json_temp" && mv "$json_temp" "$json_target"
 }
 
+# Скачивание geodata — самая долгая часть добавления подписки, и без строчки в
+# журнале она выглядела как зависшее «получение подписки». Формат совпадает с
+# event_log из lib.sh, файл тот же. В stdout не пишем под CGI: там это тело
+# HTTP-ответа.
+progress() {
+  progress_log=${EVENT_LOG:-/dev/shm/xray-remnasub/events.log}
+  progress_line=$(printf '[%s] [INFO] [geodata] %s' "$(date '+%Y-%m-%d %H:%M:%S')" "$*")
+  printf '%s\n' "$progress_line" >> "$progress_log" 2>/dev/null || true
+  [ -n "${GATEWAY_INTERFACE:-}" ] || [ -n "${REQUEST_METHOD:-}" ] || printf '%s\n' "$progress_line"
+}
+
+# Ищет файл с тем же именем и URL в уже подготовленных наборах и копирует его.
+# Источником считается только набор, чей манифест подтверждает тот же адрес,
+# иначе можно подсунуть geosite от другого провайдера.
+reuse_asset() {
+  reuse_file=$1 reuse_url=$2 reuse_target=$3
+  for reuse_dir in "$ASSET_ROOT"/*; do
+    [ -d "$reuse_dir" ] || continue
+    [ "$reuse_dir" != "$ASSET_DIR" ] || continue
+    [ -f "$reuse_dir/$reuse_file" ] && [ -s "$reuse_dir/$reuse_file" ] || continue
+    [ -f "$reuse_dir/.metadata.json" ] || continue
+    jq -e --arg file "$reuse_file" --arg url "$reuse_url" \
+      'any(.assets[]?; .file == $file and .url == $url)' "$reuse_dir/.metadata.json" >/dev/null 2>&1 || continue
+    cp "$reuse_dir/$reuse_file" "$reuse_target" 2>/dev/null || continue
+    return 0
+  done
+  return 1
+}
+
 sha256_file() {
   openssl dgst -sha256 "$1" 2>/dev/null | awk '{print $NF}'
 }
@@ -575,6 +604,16 @@ prepare() {
     [ "$ASSET_LEASED" = 0 ] || fail "Geodata asset is missing while this asset set is in use: $asset_file"
     asset_stage=$stage_dir/$asset_file
     mkdir -p "${asset_stage%/*}"
+    # Тот же URL мог уже скачаться в другой набор: наборы различаются целиком,
+    # и достаточно одного несовпавшего адреса, чтобы всё качалось заново.
+    # Копируем локально, чтобы у каждого набора остался свой файл — обновляет
+    # их Xray независимо, и общий inode здесь был бы опасен.
+    if reuse_asset "$asset_file" "$asset_url" "$asset_stage"; then
+      progress "$asset_file reused from an existing asset set"
+      printf '%s\t%s\n' "$asset_file" "$asset_stage" >> "$publish_manifest"
+      continue
+    fi
+    progress "downloading $asset_file"
     is_default=0
     case "$asset_file:$asset_url" in
       geoip.dat:https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat|geosite.dat:https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat) is_default=1 ;;
@@ -584,10 +623,22 @@ prepare() {
     else
       download_custom "$asset_url" "$asset_stage" || fail "Could not download required geodata asset: $asset_file"
     fi
+    progress "$asset_file downloaded, $(wc -c < "$asset_stage" 2>/dev/null || printf 0) bytes"
     printf '%s\t%s\n' "$asset_file" "$asset_stage" >> "$publish_manifest"
   done <<EOF
 $(jq -r '.assets[] | [.file,.url] | @tsv' "$manifest_json")
 EOF
+
+  # Список адресов рядом с самими файлами: имя каталога — это хеш всего набора,
+  # и по нему нельзя понять, какой URL дал конкретный файл. Без этой записи
+  # соседний набор нельзя переиспользовать, не рискуя подсунуть geosite от
+  # другого провайдера.
+  assets_record_tmp=$work_dir/assets-record.json
+  if cp "$assets_json" "$assets_record_tmp" 2>/dev/null; then
+    chmod 600 "$assets_record_tmp" 2>/dev/null || true
+    jq -n --slurpfile assets "$assets_record_tmp" '{assets:$assets[0]}' > "$assets_record_tmp.wrapped" 2>/dev/null &&
+      mv "$assets_record_tmp.wrapped" "$ASSET_DIR/.metadata.json" 2>/dev/null || true
+  fi
 
   overlay_temp=$work_dir/overlay.json
   jq -n --arg asset_dir "$ASSET_DIR" --slurpfile manifest "$manifest_json" '

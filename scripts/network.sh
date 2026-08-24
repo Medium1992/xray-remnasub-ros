@@ -320,4 +320,18 @@ case "$mode" in
 esac
 
 trap - EXIT
+# Слепок того, что реально оказалось в ядре. Без него «правила не создались»
+# и «правила создались, но не работают» выглядят в журнале одинаково — никак.
+{
+  echo "--- applied $mode on $iface ($iface_cidr) ---"
+  if command -v nft >/dev/null 2>&1; then
+    nft list table inet xray_remnasub 2>&1 || echo '(no inet xray_remnasub table)'
+    nft list table ip xray_remnasub_output 2>&1 || true
+  fi
+  if command -v "$IPTABLES_COMMAND" >/dev/null 2>&1; then
+    "$IPTABLES_COMMAND" -t nat -S XRAY_REMNA_PREROUTING 2>&1 || echo '(no nat chain)'
+    "$IPTABLES_COMMAND" -t mangle -S XRAY_REMNA_MANGLE_PRE 2>&1 || true
+  fi
+  ip rule show 2>&1 || true
+} >&2
 printf '%s\n' "$mode"

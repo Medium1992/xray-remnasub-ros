@@ -675,11 +675,27 @@ allow_probe() {
   event_log INFO system 'ICMP gateway probe restored: Xray is running'
 }
 
+# Супервизор молча крутился на любой из блокирующих веток: правил нет, ICMP
+# заблокирован, в журнале ни строки, и понять, чего он ждёт, было нельзя.
+# Причина пишется один раз при смене — цикл идёт по пять раз в секунду, и
+# писать её каждый заход означало бы забить журнал.
+SUPERVISOR_HOLD_REASON=
+supervisor_hold() {
+  [ "$SUPERVISOR_HOLD_REASON" != "$1" ] || return 0
+  SUPERVISOR_HOLD_REASON=$1
+  event_log INFO system "interception on hold: $1"
+}
+supervisor_release() {
+  [ -n "$SUPERVISOR_HOLD_REASON" ] || return 0
+  SUPERVISOR_HOLD_REASON=
+}
+
 supervisor() {
   while [ "$STOPPING" = 0 ]; do
     RESTART_REQUESTED=0
     load_settings
     if [ "$RUN_ENABLED" != 1 ]; then
+      supervisor_hold "proxy is switched off"
       GEODATA_BLOCKED_RUNTIME=
       LISTENER_BLOCKED_SIGNATURE=
       cleanup_routing
@@ -689,6 +705,7 @@ supervisor() {
     fi
     runtime_state=$(state_get "$STATUS_DIR/$ACTIVE_PROFILE_ID.conf" STATE idle)
     if [ -f "$JOBS_DIR/$ACTIVE_PROFILE_ID.job" ] || [ "$runtime_state" = queued ] || [ "$runtime_state" = working ]; then
+      supervisor_hold "a configuration job is still running (state=$runtime_state)"
       cleanup_routing
       block_probe || true
       sleep 0.2
@@ -696,6 +713,7 @@ supervisor() {
     fi
     runtime=$(profile_runtime_dir "$ACTIVE_PROFILE_ID")
     if [ -z "$runtime" ] || [ ! -d "$runtime" ]; then
+      supervisor_hold "no validated configuration is installed yet"
       cleanup_routing
       block_probe || true
       runtime_source=$(profile_source "$ACTIVE_PROFILE_ID")
@@ -711,6 +729,7 @@ supervisor() {
       continue
     fi
     if [ "$GEODATA_BLOCKED_RUNTIME" = "$runtime" ]; then
+      supervisor_hold "geodata assets for this configuration are busy"
       cleanup_routing
       block_probe || true
       sleep 1
@@ -745,6 +764,7 @@ supervisor() {
        [ "$runtime_listener_mode" != "$desired_listener_mode" ] ||
        [ "$runtime_redir_port" != "$REDIR_PORT" ] ||
        [ "$runtime_tproxy_port" != "$TPROXY_PORT" ]; then
+      supervisor_hold "runtime was built for '$runtime_listener_mode' on ports $runtime_redir_port/$runtime_tproxy_port, kernel now offers '$desired_listener_mode' on $REDIR_PORT/$TPROXY_PORT"
       cleanup_routing
       block_probe || true
       if [ "$LISTENER_BLOCKED_SIGNATURE" != "$listener_signature" ]; then
@@ -882,13 +902,18 @@ supervisor() {
       [ "$STOPPING" = 0 ] || break
       continue
     fi
+    supervisor_release
+    event_log INFO system "applying $runtime_listener_mode interception rules"
     if ! LISTENER_MODE="$runtime_listener_mode" LISTENER_MODE_STRICT=1 REDIR_PORT="$runtime_redir_port" TPROXY_PORT="$runtime_tproxy_port" /scripts/network.sh apply > "$RUNTIME_DIR/network.log" 2>&1; then
+      # Вывод apply уходит в отдельный файл, и раньше отказ ядра оставался
+      # только там — в журнале роутера было пусто. Тащим его сюда целиком.
       network_error=$(tail -n 20 "$RUNTIME_DIR/network.log" 2>/dev/null | tr '\r\n' '  ' | head -c 2048)
       event_log ERROR system "network rules failed: ${network_error:-unknown error}"
       LISTENER_MODE="$LISTENER_MODE" REDIR_PORT="$REDIR_PORT" TPROXY_PORT="$TPROXY_PORT" /scripts/network.sh cleanup >/dev/null 2>&1 || true
       terminate_xray "$XRAY_PID"
     else
       ROUTING_ACTIVE=1
+      event_log INFO system "interception rules applied in $runtime_listener_mode mode"
       if [ "$STOPPING" = 1 ] || [ "$RESTART_REQUESTED" = 1 ] || ! kill -0 "$XRAY_PID" 2>/dev/null; then
         cleanup_routing
         block_probe || true

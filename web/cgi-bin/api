@@ -332,6 +332,7 @@ status_response() {
     effective_listener_mode=$(cat "$RUNTIME_DIR/listener.auto" 2>/dev/null || true)
     case "$effective_listener_mode" in tproxy|redir-tproxy|redir-tun) ;; *) effective_listener_mode=redir-tun ;; esac
   fi
+  status_local_has_pass=false; [ -z "$LOCAL_INBOUND_PASS_B64" ] || status_local_has_pass=true
   xray_probe_url=$(b64_decode "$XRAY_PROBE_URL_B64")
   geodata_asset_dir=
   geodata_asset_count=0
@@ -383,12 +384,16 @@ EOF
     --argjson network_ct_fin_wait "$NETWORK_CT_FIN_WAIT" --argjson network_ct_close_wait "$NETWORK_CT_CLOSE_WAIT" --argjson network_ct_last_ack "$NETWORK_CT_LAST_ACK" \
     --argjson network_ct_time_wait "$NETWORK_CT_TIME_WAIT" --argjson network_ct_close "$NETWORK_CT_CLOSE" --argjson network_ct_unacknowledged "$NETWORK_CT_UNACKNOWLEDGED" --argjson network_ct_udp_stream "$NETWORK_CT_UDP_STREAM" \
     --argjson xray_sniffing_enabled "$XRAY_SNIFFING_ENABLED" --argjson xray_sniffing_route_only "$XRAY_SNIFFING_ROUTE_ONLY" \
+    --argjson inbound_strip_socks "$INBOUND_STRIP_SOCKS" --argjson inbound_strip_http "$INBOUND_STRIP_HTTP" \
+    --arg local_inbound_mode "$LOCAL_INBOUND_MODE" --argjson local_inbound_port "$LOCAL_INBOUND_PORT" \
+    --arg local_inbound_user "$(b64_decode "$LOCAL_INBOUND_USER_B64")" \
+    --argjson local_inbound_has_pass "$status_local_has_pass" \
     --arg xray_probe_url "$xray_probe_url" --argjson xray_probe_timeout_seconds "$XRAY_PROBE_TIMEOUT_SECONDS" --arg xray_probe_http_method "$XRAY_PROBE_HTTP_METHOD" \
     --arg geodata_storage "$GEODATA_STORAGE" --arg geodata_asset_dir "$geodata_asset_dir" --argjson geodata_asset_count "$geodata_asset_count" \
     --argjson geodata_total_bytes "$geodata_total_bytes" --argjson geodata_last_update "$geodata_last_update" --arg geodata_warning "$geodata_warning" \
     --arg backend "$backend" --arg active_interface "$active_interface" --arg active_interface_cidr "$active_interface_cidr" --arg effective_listener_mode "$effective_listener_mode" --arg version "$xray_version" \
     --arg ui_theme "$UI_THEME" --arg ui_accent "$UI_ACCENT" \
-    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
+    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,inbound_strip_socks:$inbound_strip_socks,inbound_strip_http:$inbound_strip_http,local_inbound_mode:$local_inbound_mode,local_inbound_port:$local_inbound_port,local_inbound_user:$local_inbound_user,local_inbound_has_pass:$local_inbound_has_pass,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
   status_result=$?
   rm -f "$status_profiles" "$status_events"
   [ "$status_configs" = "$active_configs" ] || rm -f "$status_configs"
@@ -1025,7 +1030,7 @@ EOF
     state_lock || reply_error 'Could not lock container state'
     load_settings
     old_global_headers=$GLOBAL_HEADERS_B64
-    old_runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS
+    old_runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE:$INBOUND_STRIP_SOCKS:$INBOUND_STRIP_HTTP:$LOCAL_INBOUND_MODE:$LOCAL_INBOUND_PORT:$LOCAL_INBOUND_USER_B64:$LOCAL_INBOUND_PASS_B64:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS
     LISTENER_MODE=$(form_value listener_mode); REDIR_PORT=$(form_value redir_port); TPROXY_PORT=$(form_value tproxy_port)
     LOG_LEVEL=$(form_value log_level)
     value=$(form_value xray_log_error); [ -z "$value" ] || XRAY_LOG_ERROR=$value
@@ -1036,6 +1041,19 @@ EOF
     case "$XRAY_LOG_DNS" in 1) ;; *) XRAY_LOG_DNS=0 ;; esac
     case "$XRAY_LOG_MASK_ADDRESS" in 1) ;; *) XRAY_LOG_MASK_ADDRESS=0 ;; esac
     NETWORK_QDISC=$(form_value network_qdisc); NETWORK_DISABLE_IPV6=$(form_value network_disable_ipv6); NETWORK_DISABLE_MULTICAST=$(form_value network_disable_multicast)
+    INBOUND_STRIP_SOCKS=$(form_value inbound_strip_socks); INBOUND_STRIP_HTTP=$(form_value inbound_strip_http)
+    LOCAL_INBOUND_MODE=$(form_value local_inbound_mode)
+    value=$(form_value local_inbound_port); [ -z "$value" ] || LOCAL_INBOUND_PORT=$value
+    LOCAL_INBOUND_USER_B64=$(b64_encode "$(form_value local_inbound_user)")
+    # Пароль в панель не возвращается, поэтому пустое поле означает «оставить
+    # как было», а не «стереть». Для снятия пароля есть отдельный флажок.
+    if [ "$(form_value local_inbound_pass_clear)" = 1 ]; then
+      LOCAL_INBOUND_PASS_B64=
+    else
+      value=$(form_value local_inbound_pass)
+      [ -z "$value" ] || LOCAL_INBOUND_PASS_B64=$(b64_encode "$value")
+    fi
+    [ -n "$LOCAL_INBOUND_USER_B64" ] || LOCAL_INBOUND_PASS_B64=
     global_headers_present=$(form_value global_headers_present)
     if [ "$global_headers_present" = 1 ]; then
       global_headers=$(form_value global_headers)
@@ -1090,7 +1108,7 @@ EOF
     valid_theme "$UI_THEME" || reply_error 'Invalid interface theme'
     [ -z "$UI_ACCENT" ] || valid_accent "$UI_ACCENT" || reply_error 'Accent colour must be #rrggbb'
     XRAY_PROBE_URL_B64=$(b64_encode "$probe_url")
-    runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS
+    runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE:$INBOUND_STRIP_SOCKS:$INBOUND_STRIP_HTTP:$LOCAL_INBOUND_MODE:$LOCAL_INBOUND_PORT:$LOCAL_INBOUND_USER_B64:$LOCAL_INBOUND_PASS_B64:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS
     write_state || reply_error 'Could not save container settings'
     network_settings_error=
     if ! apply_kernel_settings > "$RUNTIME_DIR/network-settings.log" 2>&1; then

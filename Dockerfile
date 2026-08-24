@@ -41,9 +41,12 @@ FROM ${TARGETOS}-${TARGETARCH}${TARGETVARIANT}
 ARG TARGETARCH
 ARG TARGETVARIANT
 COPY --from=package /final /
-# nftables ставится только там, где ядро роутера его умеет. На armv7 и armv5
-# перехват идёт через iptables-legacy, и network.sh сам выбирает backend по
-# наличию рабочего nft.
+# nftables ставится только на arm64 и amd64: в ядре RouterOS они появились с
+# 7.21 и только на этих архитектурах. iptables-legacy ставится везде, потому
+# что на роутере с более старой прошивкой nftables не будет и там, а обычный
+# iptables в Alpine собран поверх nftables. На armv7 legacy-симлинки нужны
+# всегда, поэтому проставлены прямо здесь; на arm64 и amd64 это решается при
+# старте контейнера по наличию модуля nf_tables.
 RUN if [ "$TARGETARCH" = amd64 ] || [ "$TARGETARCH" = arm64 ]; then \
       apk add --no-cache busybox-extras ca-certificates iproute2 iptables iptables-legacy jq nftables openssl tzdata; \
     elif [ "$TARGETARCH/$TARGETVARIANT" = arm/v7 ]; then \

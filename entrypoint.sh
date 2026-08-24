@@ -914,9 +914,25 @@ block_probe || true
 # запускался xray version и nft. Ни версия ядра в образе, ни доступность
 # nftables в ядре роутера в рантайме не меняются, так что вычисляем их один раз.
 xray version 2>/dev/null | head -n1 > "$RUNTIME_DIR/xray.version" || : > "$RUNTIME_DIR/xray.version"
-if command -v nft >/dev/null 2>&1 && nft list tables >/dev/null 2>&1; then
+# nftables в ядре RouterOS появились только в 7.21 и только на arm64 и amd64.
+# На всём остальном перехват идёт через iptables-legacy, а обычный iptables из
+# Alpine собран поверх nftables и на таком ядре просто не работает. Поэтому
+# когда nf_tables нет, штатные имена переставляются на legacy — то же, что
+# делает 05-fw-modules.sh в mihomo-remnasub-ros, только без установки пакетов:
+# они уже лежат в образе. Для armv7 симлинки проставлены ещё при сборке, для
+# armv5 в rootfs других вариантов и нет.
+link_iptables_legacy() {
+  legacy_path=$(command -v iptables-legacy 2>/dev/null) || return 0
+  legacy_dir=${legacy_path%/*}
+  for legacy_tool in '' -save -restore; do
+    [ -x "$legacy_dir/iptables-legacy$legacy_tool" ] || continue
+    ln -sf "$legacy_dir/iptables-legacy$legacy_tool" "$legacy_dir/iptables$legacy_tool" 2>/dev/null || true
+  done
+}
+if command -v nft >/dev/null 2>&1 && { lsmod 2>/dev/null | grep -q nf_tables || nft list tables >/dev/null 2>&1; }; then
   printf 'nftables\n' > "$RUNTIME_DIR/firewall.backend"
 else
+  link_iptables_legacy
   printf 'iptables\n' > "$RUNTIME_DIR/firewall.backend"
 fi
 # Во что развернётся auto, решает проба возможностей ядра, а она стоит запуска

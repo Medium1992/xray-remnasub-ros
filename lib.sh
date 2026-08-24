@@ -29,9 +29,13 @@ valid_header_block() {
     function trim(value) {gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); return value}
     /^[[:space:]]*$/ {next}
     {
-      separator=index($0, ":")
+      # Ведущая решётка — выключенный заголовок: строка сохраняется, чтобы
+      # значение не потерялось, но в запрос не попадает.
+      line=$0
+      sub(/^[[:space:]]*#/, "", line)
+      separator=index(line, ":")
       if (separator < 2) exit 1
-      key=trim(substr($0, 1, separator - 1))
+      key=trim(substr(line, 1, separator - 1))
       if (key !~ /^[A-Za-z0-9-]+$/) exit 1
       key=tolower(key)
       if (seen[key]++) exit 1
@@ -41,6 +45,18 @@ valid_header_block() {
 # Тема и акцент живут в state.conf, а не только в localStorage: панель
 # открывают с разных устройств, и вид не должен зависеть от того, с какого
 # браузера зашли. Пустой акцент означает «взять родной цвет темы».
+# Приёмник лога Xray: стандартные потоки контейнера, none (Xray сам понимает
+# это как «не писать») или абсолютный путь без пробелов и обхода каталогов.
+# Значение проверяется по имени переменной, чтобы негодное молчаливо
+# заменялось умолчанием, а не роняло сборку конфигурации.
+valid_log_sink() {
+  eval "log_sink_value=\${$1:-}"
+  case "$log_sink_value" in
+    /dev/stdout|/dev/stderr|none) return 0 ;;
+    /*[!\ ]*) case "$log_sink_value" in *..*|*' '*) ;; *) return 0 ;; esac ;;
+  esac
+  eval "$1=\$2"
+}
 valid_theme() {
   case "${1:-}" in auto|dark|light|graphite|midnight|forest|sepia) return 0 ;; *) return 1 ;; esac
 }
@@ -495,11 +511,14 @@ load_settings() {
   { read -r ACTIVE_PROFILE_ID
     read -r RUN_ENABLED
     read -r GLOBAL_HEADERS_B64
-    read -r DEFAULT_HEADERS
     read -r LISTENER_MODE
     read -r REDIR_PORT
     read -r TPROXY_PORT
     read -r LOG_LEVEL
+    read -r XRAY_LOG_ERROR
+    read -r XRAY_LOG_ACCESS
+    read -r XRAY_LOG_DNS
+    read -r XRAY_LOG_MASK_ADDRESS
     read -r NETWORK_DISABLE_IPV6
     read -r NETWORK_DISABLE_MULTICAST
     read -r NETWORK_QDISC
@@ -523,7 +542,8 @@ load_settings() {
     read -r UI_ACCENT
   } <<EOF
 $(state_load "$STATE" \
-  ACTIVE_PROFILE_ID RUN_ENABLED GLOBAL_HEADERS_B64 DEFAULT_HEADERS LISTENER_MODE REDIR_PORT TPROXY_PORT LOG_LEVEL \
+  ACTIVE_PROFILE_ID RUN_ENABLED GLOBAL_HEADERS_B64 LISTENER_MODE REDIR_PORT TPROXY_PORT LOG_LEVEL \
+  XRAY_LOG_ERROR XRAY_LOG_ACCESS XRAY_LOG_DNS XRAY_LOG_MASK_ADDRESS \
   NETWORK_DISABLE_IPV6 NETWORK_DISABLE_MULTICAST NETWORK_QDISC \
   NETWORK_CT_ESTABLISHED NETWORK_CT_SYN_SENT NETWORK_CT_SYN_RECV NETWORK_CT_FIN_WAIT \
   NETWORK_CT_CLOSE_WAIT NETWORK_CT_LAST_ACK NETWORK_CT_TIME_WAIT NETWORK_CT_CLOSE \
@@ -534,15 +554,20 @@ $(state_load "$STATE" \
 EOF
 
   case "$RUN_ENABLED" in 0|1) ;; *) RUN_ENABLED=0 ;; esac
-  # Обязательные заголовки подставляются по умолчанию, поэтому пустое или
-  # испорченное значение трактуется как включено — как было до появления
-  # переключателя.
-  case "$DEFAULT_HEADERS" in 0) ;; *) DEFAULT_HEADERS=1 ;; esac
   case "$LISTENER_MODE" in auto|tproxy|redir-tproxy|redir-tun) ;; *) LISTENER_MODE=auto ;; esac
   valid_number "$REDIR_PORT" && [ "$REDIR_PORT" -ge 1 ] && [ "$REDIR_PORT" -le 65535 ] || REDIR_PORT=12345
   valid_number "$TPROXY_PORT" && [ "$TPROXY_PORT" -ge 1 ] && [ "$TPROXY_PORT" -le 65535 ] || TPROXY_PORT=12346
   [ "$REDIR_PORT" != "$TPROXY_PORT" ] || TPROXY_PORT=12346
   case "$LOG_LEVEL" in none|debug|info|warning|error) ;; *) LOG_LEVEL=warning ;; esac
+  # По умолчанию логи уходят в stdout/stderr контейнера, то есть в журнал
+  # RouterOS и в оперативную память. Файл на накопителе допускается, но это
+  # осознанный выбор пользователя: постоянная запись логов на флешку роутера
+  # изнашивает её ровно так же, как geodata. Пустое значение означает, что
+  # ключ в конфигурацию не попадёт и Xray применит своё умолчание.
+  valid_log_sink XRAY_LOG_ERROR /dev/stderr
+  valid_log_sink XRAY_LOG_ACCESS /dev/stdout
+  case "$XRAY_LOG_DNS" in 1) ;; *) XRAY_LOG_DNS=0 ;; esac
+  case "$XRAY_LOG_MASK_ADDRESS" in 1) ;; *) XRAY_LOG_MASK_ADDRESS=0 ;; esac
   case "$NETWORK_DISABLE_IPV6" in 0|1) ;; *) NETWORK_DISABLE_IPV6=1 ;; esac
   case "$NETWORK_DISABLE_MULTICAST" in 0|1) ;; *) NETWORK_DISABLE_MULTICAST=1 ;; esac
   case "$NETWORK_QDISC" in system|fq_codel|cake|codel|sfq|pfifo|bfifo) ;; *) NETWORK_QDISC=fq_codel ;; esac
@@ -574,11 +599,14 @@ STATE_VERSION=1
 ACTIVE_PROFILE_ID=$ACTIVE_PROFILE_ID
 RUN_ENABLED=$RUN_ENABLED
 GLOBAL_HEADERS_B64=$GLOBAL_HEADERS_B64
-DEFAULT_HEADERS=$DEFAULT_HEADERS
 LISTENER_MODE=$LISTENER_MODE
 REDIR_PORT=$REDIR_PORT
 TPROXY_PORT=$TPROXY_PORT
 LOG_LEVEL=$LOG_LEVEL
+XRAY_LOG_ERROR=$XRAY_LOG_ERROR
+XRAY_LOG_ACCESS=$XRAY_LOG_ACCESS
+XRAY_LOG_DNS=$XRAY_LOG_DNS
+XRAY_LOG_MASK_ADDRESS=$XRAY_LOG_MASK_ADDRESS
 NETWORK_DISABLE_IPV6=$NETWORK_DISABLE_IPV6
 NETWORK_DISABLE_MULTICAST=$NETWORK_DISABLE_MULTICAST
 NETWORK_QDISC=$NETWORK_QDISC
@@ -939,7 +967,11 @@ build_xray_config() {
   [ "$XRAY_SNIFFING_ENABLED" = 1 ] && build_sniffing=true || build_sniffing=false
   [ "$XRAY_SNIFFING_ROUTE_ONLY" = 1 ] && build_route_only=true || build_route_only=false
   jq -e '(.fakeDns? != null) or (.fakedns? != null)' "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1 && build_fakedns=true || build_fakedns=false
-  if ! jq -n --arg log_level "$LOG_LEVEL" '{log:{loglevel:$log_level}}' > "$BUILD_CANDIDATE_DIR/80-container-log.json" ||
+  if ! jq -n --arg log_level "$LOG_LEVEL" --arg error "$XRAY_LOG_ERROR" --arg access "$XRAY_LOG_ACCESS" \
+        --argjson dns_log "$XRAY_LOG_DNS" --argjson mask_address "$XRAY_LOG_MASK_ADDRESS" \
+        '{log: ({loglevel: $log_level, dnsLog: ($dns_log == 1), maskAddress: (if $mask_address == 1 then "quarter" else "" end)}
+                + (if $error == "" then {} else {error: $error} end)
+                + (if $access == "" then {} else {access: $access} end))}' > "$BUILD_CANDIDATE_DIR/80-container-log.json" ||
      ! jq -n \
        --arg listener_mode "$build_listener_mode" \
        --argjson redir_port "$REDIR_PORT" \

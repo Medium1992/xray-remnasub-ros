@@ -289,6 +289,19 @@
     }).filter(Boolean);
   }
 
+  // Флаг в начале имени конфигурации: либо пара regional indicator (🇱🇻), либо
+  // чёрный флаг с тегами (🏴󠁧󠁢󠁳󠁣󠁴󠁿). Он занимает место номера строки, а имя
+  // показывается уже без него — иначе флаг и цифра стоят рядом и дублируют
+  // друг друга.
+  const FLAG_PREFIX = /^(?:[\u{1F1E6}-\u{1F1FF}]{2}|\u{1F3F4}[\u{E0060}-\u{E007F}]+)/u;
+
+  function splitFlag(name) {
+    const text = String(name || "");
+    const match = text.match(FLAG_PREFIX);
+    if (!match) return { flag: "", name: text };
+    return { flag: match[0], name: text.slice(match[0].length).replace(/^[\s·—-]+/, "") };
+  }
+
   function headerRow(name = "", value = "", locked = false, enabled = true) {
     return `<div class="header-row"><label class="header-toggle" title="Отправлять этот заголовок"><input type="checkbox" data-header-enabled${enabled ? " checked" : ""}><i></i></label><input type="text" data-header-key value="${escapeHtml(name)}" placeholder="X-Header" pattern="[A-Za-z0-9-]+" maxlength="128"${locked ? " readonly" : ""}><input type="text" data-header-value value="${escapeHtml(value)}" placeholder="Значение" maxlength="2048">${locked ? `<span class="header-lock" title="Обязательный заголовок">${icon("lock")}</span>` : `<button class="icon-button danger" type="button" data-remove-header title="Удалить заголовок">${icon("trash")}</button>`}</div>`;
   }
@@ -520,7 +533,11 @@
       const probeTitle = probe?.error || `HTTP ${probeMethod} через Xray${probeSource}`;
       const switching = Boolean(pending) && selected;
       const rowState = switching ? "переключение..." : selected ? "выбрана" : "выбрать";
-      return `<div class="config-row${selected ? " selected" : ""}${switching ? " switching" : ""}"><button class="config-row-select" type="button" data-config-index="${Number(config.index)}" aria-pressed="${selected ? "true" : "false"}"${selected || pending || ui.busy.has("config") ? " disabled" : ""}><span class="config-row-index">${Number(config.index) + 1}</span><span class="config-row-copy"><strong>${escapeHtml(config.name || `Конфигурация ${Number(config.index) + 1}`)}</strong>${description}</span><span class="config-row-state">${rowState}</span></button><button class="config-probe${probeClass}" type="button" data-probe-index="${Number(config.index)}" title="${escapeHtml(probeTitle)}"${probeRunning || probeAllBusy ? " disabled" : ""}>${icon("activity")}<span>${escapeHtml(probeLabel)}</span></button></div>`;
+      const { flag, name: configName } = splitFlag(config.name);
+      const badge = flag
+        ? `<span class="config-row-index flag" title="Конфигурация ${Number(config.index) + 1}">${escapeHtml(flag)}</span>`
+        : `<span class="config-row-index">${Number(config.index) + 1}</span>`;
+      return `<div class="config-row${selected ? " selected" : ""}${switching ? " switching" : ""}"><button class="config-row-select" type="button" data-config-index="${Number(config.index)}" aria-pressed="${selected ? "true" : "false"}"${selected || pending || ui.busy.has("config") ? " disabled" : ""}>${badge}<span class="config-row-copy"><strong>${escapeHtml(configName || `Конфигурация ${Number(config.index) + 1}`)}</strong>${description}</span><span class="config-row-state">${rowState}</span></button><button class="config-probe${probeClass}" type="button" data-probe-index="${Number(config.index)}" title="${escapeHtml(probeTitle)}"${probeRunning || probeAllBusy ? " disabled" : ""}>${icon("activity")}<span>${escapeHtml(probeLabel)}</span></button></div>`;
     }).join("")}</div><p class="config-probe-note">«Проверить все» поднимает один экземпляр Xray на всю подписку и опрашивает outbound параллельно. Проверка отдельной строки поднимает свой экземпляр рядом с работающим ядром.</p></div>`;
   }
 

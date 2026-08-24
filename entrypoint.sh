@@ -342,6 +342,9 @@ process_jobs() {
       event_log INFO "$id" "$action started"
       if [ "$action" != fetch ] || fetch_profile "$id"; then
         if [ "$action" = fetch ]; then
+          event_log INFO "$id" "subscription downloaded: HTTP ${FETCH_HTTP_STATUS:-?}, ${FETCH_BYTES:-0} bytes"
+          set_status "$id" working 'Проверка подписки' validation "$action" "$job_started" 0 \
+            "$FETCH_HTTP_STATUS" "$FETCH_HTTP_LINE" "$FETCH_BYTES"
           BUILD_SOURCE_OVERRIDE=$FETCH_CANDIDATE
           export BUILD_SOURCE_OVERRIDE
         fi

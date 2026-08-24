@@ -547,6 +547,12 @@ load_settings() {
     read -r XRAY_PROBE_TIMEOUT_SECONDS
     read -r XRAY_PROBE_HTTP_METHOD
     read -r GEODATA_STORAGE
+    read -r INBOUND_STRIP_SOCKS
+    read -r INBOUND_STRIP_HTTP
+    read -r LOCAL_INBOUND_MODE
+    read -r LOCAL_INBOUND_PORT
+    read -r LOCAL_INBOUND_USER_B64
+    read -r LOCAL_INBOUND_PASS_B64
     read -r UI_THEME
     read -r UI_ACCENT
   } <<EOF
@@ -559,7 +565,9 @@ $(state_load "$STATE" \
   NETWORK_CT_UNACKNOWLEDGED NETWORK_CT_UDP_STREAM \
   XRAY_SNIFFING_ENABLED XRAY_SNIFFING_ROUTE_ONLY \
   XRAY_PROBE_URL_B64 XRAY_PROBE_TIMEOUT_SECONDS XRAY_PROBE_HTTP_METHOD \
-  GEODATA_STORAGE UI_THEME UI_ACCENT)
+  GEODATA_STORAGE INBOUND_STRIP_SOCKS INBOUND_STRIP_HTTP \
+  LOCAL_INBOUND_MODE LOCAL_INBOUND_PORT LOCAL_INBOUND_USER_B64 LOCAL_INBOUND_PASS_B64 \
+  UI_THEME UI_ACCENT)
 EOF
 
   case "$RUN_ENABLED" in 0|1) ;; *) RUN_ENABLED=0 ;; esac
@@ -597,6 +605,15 @@ EOF
   valid_number "$XRAY_PROBE_TIMEOUT_SECONDS" && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -ge 1 ] && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -le 30 ] || XRAY_PROBE_TIMEOUT_SECONDS=5
   case "$XRAY_PROBE_HTTP_METHOD" in GET|HEAD) ;; *) XRAY_PROBE_HTTP_METHOD=HEAD ;; esac
   case "$GEODATA_STORAGE" in memory|persistent) ;; *) GEODATA_STORAGE=memory ;; esac
+  # Локальные входы из подписки по умолчанию вырезаются: перехват здесь свой,
+  # а чужой socks на неизвестном порту — это открытый прокси на роутере.
+  case "$INBOUND_STRIP_SOCKS" in 0) ;; *) INBOUND_STRIP_SOCKS=1 ;; esac
+  case "$INBOUND_STRIP_HTTP" in 0) ;; *) INBOUND_STRIP_HTTP=1 ;; esac
+  # В Xray `mixed` — это алиас того же SocksServerConfig, что и `socks`,
+  # поэтому режим хранится под именем socks, а протокол в конфигурации
+  # пишется как socks.
+  case "$LOCAL_INBOUND_MODE" in off|socks|http) ;; *) LOCAL_INBOUND_MODE=socks ;; esac
+  valid_number "$LOCAL_INBOUND_PORT" && [ "$LOCAL_INBOUND_PORT" -ge 1 ] && [ "$LOCAL_INBOUND_PORT" -le 65535 ] || LOCAL_INBOUND_PORT=1080
   valid_theme "$UI_THEME" || UI_THEME=auto
   valid_accent "$UI_ACCENT" || UI_ACCENT=
 }
@@ -635,6 +652,12 @@ XRAY_PROBE_URL_B64=$XRAY_PROBE_URL_B64
 XRAY_PROBE_TIMEOUT_SECONDS=$XRAY_PROBE_TIMEOUT_SECONDS
 XRAY_PROBE_HTTP_METHOD=$XRAY_PROBE_HTTP_METHOD
 GEODATA_STORAGE=$GEODATA_STORAGE
+INBOUND_STRIP_SOCKS=$INBOUND_STRIP_SOCKS
+INBOUND_STRIP_HTTP=$INBOUND_STRIP_HTTP
+LOCAL_INBOUND_MODE=$LOCAL_INBOUND_MODE
+LOCAL_INBOUND_PORT=$LOCAL_INBOUND_PORT
+LOCAL_INBOUND_USER_B64=$LOCAL_INBOUND_USER_B64
+LOCAL_INBOUND_PASS_B64=$LOCAL_INBOUND_PASS_B64
 UI_THEME=$UI_THEME
 UI_ACCENT=$UI_ACCENT
 EOF
@@ -830,6 +853,41 @@ build_xray_config() {
   fi
   rm -f "$build_metadata/configs.unselected.json"
 
+  # Входы из подписки. Перехват здесь целиком свой, поэтому dokodemo-door и tun
+  # из чужого шаблона вырезаются всегда: раньше они не удалялись и любой такой
+  # вход просто ронял сборку конфликтом портов. socks (и его алиас mixed) с
+  # http вырезаются по флажку, включённому по умолчанию, — оставить чужой
+  # открытый прокси на роутере должно быть осознанным решением.
+  build_stripped_inbounds=$(jq -r \
+       --argjson strip_socks "$INBOUND_STRIP_SOCKS" \
+       --argjson strip_http "$INBOUND_STRIP_HTTP" '
+       def kind: ((.protocol? // "") | tostring | ascii_downcase);
+       [.inbounds[]? |
+         select((kind | . == "dokodemo-door" or . == "tunnel" or . == "tun") or
+                ($strip_socks == 1 and (kind | . == "socks" or . == "mixed")) or
+                ($strip_http == 1 and kind == "http")) |
+         ((.tag? // "") | tostring) as $tag |
+         (if ($tag | length) > 0 then $tag else "(untagged)" end) + "/" + kind]
+       | join(", ")
+     ' "$BUILD_CANDIDATE_DIR/10-subscription.json" 2>/dev/null) || build_stripped_inbounds=
+  if [ -n "$build_stripped_inbounds" ]; then
+    build_stripped_tmp=$BUILD_CANDIDATE_DIR/10-subscription.stripped.json
+    if ! jq --argjson strip_socks "$INBOUND_STRIP_SOCKS" --argjson strip_http "$INBOUND_STRIP_HTTP" '
+         def kind: ((.protocol? // "") | tostring | ascii_downcase);
+         .inbounds = [.inbounds[]? |
+           select(((kind | . == "dokodemo-door" or . == "tunnel" or . == "tun") or
+                   ($strip_socks == 1 and (kind | . == "socks" or . == "mixed")) or
+                   ($strip_http == 1 and kind == "http")) | not)]
+       ' "$BUILD_CANDIDATE_DIR/10-subscription.json" > "$build_stripped_tmp" ||
+       ! mv "$build_stripped_tmp" "$BUILD_CANDIDATE_DIR/10-subscription.json"; then
+      rm -f "$build_stripped_tmp"
+      BUILD_ERROR='Could not remove source inbounds'
+      discard_build_candidate
+      return 1
+    fi
+    event_log INFO "$build_id" "removed source inbounds: $build_stripped_inbounds"
+  fi
+
   if ! build_inbound_conflict=$(jq -r \
        --arg listener_mode "$build_listener_mode" \
        --argjson redir_port "$REDIR_PORT" \
@@ -929,7 +987,7 @@ build_xray_config() {
   fi
 
   if ! build_reserved_inbound_tag=$(jq -r '
-       ["xray-remnasub-mixed", "xray-remnasub-tcp", "xray-remnasub-udp", "xray-remnasub-tproxy", "xray-remnasub-tun"] as $reserved |
+       ["xray-remnasub-local", "xray-remnasub-tcp", "xray-remnasub-udp", "xray-remnasub-tproxy", "xray-remnasub-tun"] as $reserved |
        ([.inbounds[]?.tag? |
          select(type == "string") |
          . as $tag |
@@ -989,16 +1047,26 @@ build_xray_config() {
        --argjson tproxy_port "$TPROXY_PORT" \
        --argjson sniffing_enabled "$build_sniffing" \
        --argjson route_only "$build_route_only" \
-       --argjson fakedns "$build_fakedns" '
+       --argjson fakedns "$build_fakedns" \
+       --arg local_mode "$LOCAL_INBOUND_MODE" \
+       --argjson local_port "$LOCAL_INBOUND_PORT" \
+       --arg local_user "$(b64_decode "$LOCAL_INBOUND_USER_B64")" \
+       --arg local_pass "$(b64_decode "$LOCAL_INBOUND_PASS_B64")" '
        def managed_sniffing: {
          enabled:$sniffing_enabled,
          destOverride:(["http","tls","quic"] + (if $fakedns then ["fakedns"] else [] end)),
          metadataOnly:false,
          routeOnly:$route_only
        };
-       {inbounds:([
-         {tag:"xray-remnasub-mixed",port:1080,protocol:"mixed",settings:{udp:true},sniffing:managed_sniffing}
-       ] + if $listener_mode == "tproxy" then [
+       {inbounds:((if $local_mode == "off" then [] else [
+         {tag:"xray-remnasub-local",port:$local_port,protocol:$local_mode,
+          settings:(if $local_mode == "socks"
+                    then {udp:true} + (if $local_user == "" then {auth:"noauth"}
+                                       else {auth:"password",accounts:[{user:$local_user,pass:$local_pass}]} end)
+                    else (if $local_user == "" then {}
+                          else {accounts:[{user:$local_user,pass:$local_pass}]} end) end),
+          sniffing:managed_sniffing}
+       ] end) + if $listener_mode == "tproxy" then [
          {tag:"xray-remnasub-tproxy",port:$tproxy_port,protocol:"dokodemo-door",settings:{network:"tcp,udp",followRedirect:true},streamSettings:{sockopt:{tproxy:"tproxy"}},sniffing:managed_sniffing}
        ] elif $listener_mode == "redir-tproxy" then [
          {tag:"xray-remnasub-tcp",port:$redir_port,protocol:"dokodemo-door",settings:{network:"tcp",followRedirect:true},streamSettings:{sockopt:{tproxy:"redirect"}},sniffing:managed_sniffing},

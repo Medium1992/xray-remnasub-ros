@@ -791,6 +791,171 @@ EOF
       --argjson alive "$probe_alive" --argjson total "$probe_total" --arg method "$probe_method" --arg source "$probe_source_kind" \
       '{ok:true,index:$index,reachable:$reachable,delay_ms:$delay,alive:$alive,total:$total,method:$method,source:$source}'
     ;;
+  probe-all)
+    # Проверка всех конфигураций одним экземпляром ядра. Раньше панель гоняла
+    # probe-config по очереди, поднимая отдельный Xray на каждую строку: на
+    # восьми конфигурациях это восемь запусков подряд. burstObservatory умеет
+    # опрашивать произвольное число outbound параллельно, поэтому все они
+    # сводятся в один конфиг.
+    #
+    # dns, routing и geodata сюда не переносятся сознательно: burstObservatory
+    # дозванивается через outbound напрямую, мимо маршрутизации, поэтому
+    # правила с geosite/geoip только потребовали бы файлы geodata и аренду на
+    # них, ничего не давая проверке. Имена серверов резолвит системный
+    # резолвер контейнера.
+    id=$(form_value profile_id); profile=$(profile_path "$id") || reply_error 'Invalid profile'; [ -f "$profile" ] || reply_error 'Profile not found'
+    command -v nc >/dev/null 2>&1 || reply_error 'Health check is unavailable'
+    command -v wget >/dev/null 2>&1 || reply_error 'Health check is unavailable'
+    probe_lock || { probe_cleanup; reply_error 'Another health check is still running'; }
+    umask 077
+    probe_nonce=$(openssl rand -hex 8 2>/dev/null || printf '%s-%s' "$$" "$(date +%s)")
+    PROBE_TEMP_DIR=$RUNTIME_DIR/probe.$probe_nonce
+    mkdir -m 700 "$PROBE_TEMP_DIR" 2>/dev/null || { probe_cleanup; reply_error 'Could not prepare health check'; }
+    trap 'probe_cleanup' 0
+    trap 'exit 1' HUP INT TERM
+    probe_source=$(profile_source "$id")
+    probe_configs_meta=$PROBE_TEMP_DIR/configs.json
+    probe_raw=$PROBE_TEMP_DIR/source.json
+    probe_ready=0
+    if lock_job "$id-selection"; then
+      configs=$(profile_configs "$id" 2>/dev/null || true)
+      if [ -s "$probe_source" ] && [ -s "$configs" ] &&
+         jq -e 'type == "array" and length > 0' "$probe_source" >/dev/null 2>&1 &&
+         cp "$probe_source" "$probe_raw" && cp "$configs" "$probe_configs_meta"; then
+        probe_ready=1
+      fi
+      unlock_job "$id-selection"
+    fi
+    [ "$probe_ready" = 1 ] || reply_error 'Configurations are not ready'
+    load_settings
+    probe_default_url=$(b64_decode "$XRAY_PROBE_URL_B64")
+    case "$probe_default_url" in
+      http://*|https://*) case "$probe_default_url" in *[[:space:]]*) probe_default_url=https://www.gstatic.com/generate_204 ;; esac ;;
+      *) probe_default_url=https://www.gstatic.com/generate_204 ;;
+    esac
+    [ "${#probe_default_url}" -le 2048 ] || probe_default_url=https://www.gstatic.com/generate_204
+    probe_method=$XRAY_PROBE_HTTP_METHOD
+    probe_wait_timeout=$XRAY_PROBE_TIMEOUT_SECONDS
+    valid_number "$probe_wait_timeout" && [ "$probe_wait_timeout" -ge 1 ] && [ "$probe_wait_timeout" -le 120 ] || probe_wait_timeout=5
+    probe_metrics_port=$(probe_port) || reply_error 'No local port is available for health check'
+    probe_prefix=remnasub-all-$probe_nonce-
+    probe_config=$PROBE_TEMP_DIR/config.json
+    probe_plan=$PROBE_TEMP_DIR/plan.json
+    if ! jq \
+      --arg prefix "$probe_prefix" \
+      --arg metrics_tag "${probe_prefix}metrics" \
+      --arg metrics_listen "127.0.0.1:$probe_metrics_port" \
+      --arg url "$probe_default_url" \
+      --arg method "$probe_method" \
+      --arg timeout "${probe_wait_timeout}s" '
+      def proxy:
+        type == "object" and
+        ((.protocol? // "" | tostring | ascii_downcase) as $protocol |
+          (["freedom","blackhole","dns","loopback"] | index($protocol)) == null);
+      # Теги переписываются на c<конфигурация>-<позиция>: одинаковые теги в
+      # разных элементах подписки — обычное дело, а в общем ядре они обязаны
+      # быть уникальны. Ссылки цепочек переносятся по той же карте, иначе
+      # dialerProxy и proxySettings укажут в пустоту.
+      def retag($i; $outs):
+        ([$outs | to_entries[] | {key: ((.value.tag // "") | tostring), value: ("c\($i)-\(.key)")}]
+         | map(select(.key != "")) | from_entries) as $map |
+        [$outs | to_entries[] | .key as $j | .value
+          | .tag = "c\($i)-\($j)"
+          | (if (.proxySettings?.tag? | type) == "string" and ($map[.proxySettings.tag] != null)
+             then .proxySettings.tag = $map[.proxySettings.tag] else . end)
+          | (if (.streamSettings?.sockopt?.dialerProxy? | type) == "string" and ($map[.streamSettings.sockopt.dialerProxy] != null)
+             then .streamSettings.sockopt.dialerProxy = $map[.streamSettings.sockopt.dialerProxy] else . end)
+          | (if (.sockopt?.dialerProxy? | type) == "string" and ($map[.sockopt.dialerProxy] != null)
+             then .sockopt.dialerProxy = $map[.sockopt.dialerProxy] else . end)];
+      [to_entries[]
+       | .key as $i
+       | select(.value | type == "object")
+       | (retag($i; (.value.outbounds // []))) as $outs
+       | {index: $i, outbounds: $outs,
+          target: ([$outs | to_entries[] | select(.value | proxy) | .key] | first)}] as $configs |
+      ($configs | map(select(.target != null) | {index, tag: ($prefix + (.index | tostring)), source: .outbounds[.target]})) as $targets |
+      {plan: ($targets | map({index, tag})),
+       config: {
+         log: {loglevel: "error"},
+         stats: {},
+         inbounds: [],
+         outbounds: (($configs | map(.outbounds) | add // []) + ($targets | map(.source + {tag}))),
+         metrics: {tag: $metrics_tag, listen: $metrics_listen},
+         burstObservatory: {subjectSelector: [$prefix],
+                            pingConfig: {destination: $url, connectivity: "", interval: "1h",
+                                         sampling: 1, timeout: $timeout, httpMethod: $method}}}}
+    ' "$probe_raw" > "$PROBE_TEMP_DIR/assembled.json"; then
+      reply_error 'Could not assemble health check configuration'
+    fi
+    jq -c '.plan' "$PROBE_TEMP_DIR/assembled.json" > "$probe_plan" || reply_error 'Could not assemble health check configuration'
+    jq '.config' "$PROBE_TEMP_DIR/assembled.json" > "$probe_config" || reply_error 'Could not assemble health check configuration'
+    probe_total=$(jq -r 'length' "$probe_plan" 2>/dev/null)
+    valid_number "$probe_total" || reply_error 'Could not count configurations'
+    [ "$probe_total" -ge 1 ] || reply_error 'No configuration has a proxy outbound to check'
+    [ "$probe_total" -le 64 ] || reply_error 'Subscription has more than 64 configurations to check'
+    if ! xray run -test -c "$probe_config" > "$PROBE_TEMP_DIR/xray.log" 2>&1; then
+      reply_error 'Xray rejected health check configuration'
+    fi
+    xray run -c "$probe_config" > "$PROBE_TEMP_DIR/xray.log" 2>&1 &
+    PROBE_XRAY_PID=$!
+    probe_metrics=$PROBE_TEMP_DIR/metrics.json
+    probe_metrics_tmp=$PROBE_TEMP_DIR/metrics.tmp
+    probe_metrics_ready=0
+    probe_deadline=$(( $(date +%s) + probe_wait_timeout + 10 ))
+    while [ "$(date +%s)" -le "$probe_deadline" ]; do
+      if wget -q -Y off -T 1 -O "$probe_metrics_tmp" "http://127.0.0.1:$probe_metrics_port/debug/vars" 2>/dev/null &&
+         jq -e 'type == "object"' "$probe_metrics_tmp" >/dev/null 2>&1; then
+        mv "$probe_metrics_tmp" "$probe_metrics"
+        probe_metrics_ready=1
+        probe_seen=$(jq -r --arg prefix "$probe_prefix" '((.observatory // {}) | to_entries | map(select(.key | startswith($prefix))) | length)' "$probe_metrics" 2>/dev/null)
+        valid_number "$probe_seen" || probe_seen=0
+        [ "$probe_seen" -lt "$probe_total" ] || break
+      fi
+      kill -0 "$PROBE_XRAY_PID" 2>/dev/null || break
+      sleep 0.2
+    done
+    [ "$probe_metrics_ready" = 1 ] || reply_error 'Xray health check could not start'
+    probe_results=$PROBE_TEMP_DIR/results.json
+    jq -c --slurpfile plan "$probe_plan" --arg method "$probe_method" '
+      (.observatory // {}) as $observed |
+      [$plan[0][] |
+        ($observed[.tag] // null) as $result |
+        {index,
+         delay_ms: (if ($result.alive? // false) and (($result.delay? | type) == "number") and ($result.delay >= 0)
+                    then $result.delay else null end),
+         method: $method, source: "burst"}]
+    ' "$probe_metrics" > "$probe_results" 2>/dev/null || printf '[]\n' > "$probe_results"
+    probe_store=$STATUS_DIR/$id.probes.json
+    probe_store_tmp=$probe_store.tmp.$$
+    probe_store_previous=$PROBE_TEMP_DIR/probes-previous.json
+    if [ -s "$probe_store" ] && jq -e 'type == "object"' "$probe_store" >/dev/null 2>&1; then
+      cp "$probe_store" "$probe_store_previous" 2>/dev/null || printf '{}\n' > "$probe_store_previous"
+    else
+      printf '{}\n' > "$probe_store_previous"
+    fi
+    if jq -n --slurpfile previous "$probe_store_previous" --slurpfile results "$probe_results" \
+        --slurpfile meta "$probe_configs_meta" --argjson at "$(date +%s)" '
+        ([$meta[0][]? | {key: (.index | tostring), value: .fingerprint}] | from_entries) as $fingerprints |
+        (($previous[0] // {}) | if type == "object" then . else {} end) as $stored |
+        reduce ($results[0][]?) as $result ($stored;
+          ($fingerprints[$result.index | tostring]) as $fingerprint |
+          if $fingerprint == null then . else
+            . + {($fingerprint): {delay_ms: $result.delay_ms, method: $result.method, source: $result.source, at: $at}}
+          end)
+        | to_entries | sort_by(-.value.at)[0:64] | from_entries
+      ' > "$probe_store_tmp" 2>/dev/null; then
+      chmod 600 "$probe_store_tmp" 2>/dev/null || true
+      mv "$probe_store_tmp" "$probe_store" 2>/dev/null || rm -f "$probe_store_tmp"
+    else
+      rm -f "$probe_store_tmp"
+    fi
+    probe_reply=$(jq -c '.' "$probe_results")
+    probe_cleanup
+    trap - 0 HUP INT TERM
+    json_headers
+    jq -n --argjson results "$probe_reply" --argjson total "$probe_total" \
+      '{ok:true,total:$total,results:$results}'
+    ;;
   select)
     id=$(form_value profile_id); profile=$(profile_path "$id") || reply_error 'Invalid profile'; [ -f "$profile" ] || reply_error 'Profile not found'
     state_lock || reply_error 'Could not lock container state'

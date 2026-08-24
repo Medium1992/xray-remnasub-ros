@@ -468,7 +468,7 @@
     if (!configs.length) return profile.source_present ? `<div class="subscription-configs"><div class="config-list-empty">Конфигурации появятся после проверки подписки</div></div>` : "";
     const probeAllBusy = ui.busy.has(`probe-all:${profile.id}`);
     const probeRunning = Array.from(ui.probes.entries()).some(([key, probe]) => key.startsWith(`${profile.id}:`) && probe.pending);
-    return `<div class="subscription-configs"><div class="config-list-heading"><span>Конфигурации подписки <small>${configs.length}</small></span><button class="config-probe-all${probeAllBusy ? " loading" : ""}" type="button" data-probe-all title="Последовательно проверить все конфигурации HTTP-запросом через Xray"${probeAllBusy || probeRunning ? " disabled" : ""}>${icon("activity")}<span>${probeAllBusy ? "Проверка" : "Проверить все"}</span></button></div><div class="config-list">${configs.map((config) => {
+    return `<div class="subscription-configs"><div class="config-list-heading"><span>Конфигурации подписки <small>${configs.length}</small></span><button class="config-probe-all${probeAllBusy ? " loading" : ""}" type="button" data-probe-all title="Проверить все конфигурации одним экземпляром Xray"${probeAllBusy || probeRunning ? " disabled" : ""}>${icon("activity")}<span>${probeAllBusy ? "Проверка" : "Проверить все"}</span></button></div><div class="config-list">${configs.map((config) => {
       const selected = profile.selected_config_fingerprint
         ? config.fingerprint === profile.selected_config_fingerprint
         : Number(config.index) === Number(profile.selected_config_index);
@@ -500,7 +500,7 @@
       const probeSource = probe?.source ? ` · источник: ${probe.source}` : "";
       const probeTitle = probe?.error || `HTTP ${probeMethod} через Xray${probeSource}`;
       return `<div class="config-row${selected ? " selected" : ""}"><button class="config-row-select" type="button" data-config-index="${Number(config.index)}" aria-pressed="${selected ? "true" : "false"}"${selected || ui.busy.has("config") ? " disabled" : ""}><span class="config-row-index">${Number(config.index) + 1}</span><span class="config-row-copy"><strong>${escapeHtml(config.name || `Конфигурация ${Number(config.index) + 1}`)}</strong>${description}</span><span class="config-row-state">${selected ? "выбрана" : "выбрать"}</span></button><button class="config-probe${probeClass}" type="button" data-probe-index="${Number(config.index)}" title="${escapeHtml(probeTitle)}"${probeRunning || probeAllBusy ? " disabled" : ""}>${icon("activity")}<span>${escapeHtml(probeLabel)}</span></button></div>`;
-    }).join("")}</div><p class="config-probe-note">Каждая проверка поднимает отдельный экземпляр Xray рядом с работающим. На роутерах с 256 МБ памяти проверяйте конфигурации по одной.</p></div>`;
+    }).join("")}</div><p class="config-probe-note">«Проверить все» поднимает один экземпляр Xray на всю подписку и опрашивает outbound параллельно. Проверка отдельной строки поднимает свой экземпляр рядом с работающим ядром.</p></div>`;
   }
 
   function settingsStateSignature() {
@@ -847,9 +847,39 @@
     ui.busy.add(key);
     cardsFingerprint = "";
     renderSubscriptions();
+    const probeKeyOf = (config) => `${profile.id}:${config.fingerprint || config.index}`;
+    const snapshot = [...model.configs];
+    snapshot.forEach((config) => ui.probes.set(probeKeyOf(config), { pending: true }));
+    cardsFingerprint = "";
+    renderSubscriptions();
     try {
-      for (const config of [...model.configs]) await probeConfig(config.index, true);
+      // Один запрос вместо цикла по конфигурациям: контейнер поднимает одно
+      // ядро и опрашивает все outbound разом.
+      const result = await api("probe-all", { profile_id: profile.id });
+      const byIndex = new Map(snapshot.map((config) => [Number(config.index), config]));
+      (result.results || []).forEach((entry) => {
+        const config = byIndex.get(Number(entry.index));
+        if (!config) return;
+        ui.probes.set(probeKeyOf(config), {
+          pending: false,
+          delay_ms: entry.delay_ms,
+          method: entry.method,
+          source: entry.source,
+        });
+      });
+      snapshot.forEach((config) => {
+        const probeKey = probeKeyOf(config);
+        if (!ui.probes.get(probeKey)?.pending) return;
+        ui.probes.set(probeKey, { pending: false, error: "В конфигурации нет proxy-outbound для проверки" });
+      });
       toast("HTTP-проверка завершена");
+    } catch (error) {
+      snapshot.forEach((config) => {
+        const probeKey = probeKeyOf(config);
+        if (!ui.probes.get(probeKey)?.pending) return;
+        ui.probes.set(probeKey, { pending: false, error: error.message || String(error) });
+      });
+      toast(error.message || String(error), "error");
     } finally {
       ui.busy.delete(key);
       cardsFingerprint = "";

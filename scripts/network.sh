@@ -50,7 +50,10 @@ nft_tproxy_available() {
     'add rule inet xray_remnasub_probe prerouting meta mark 4294967295 meta l4proto udp tproxy ip to 127.0.0.1:1 accept' \
     'add chain inet xray_remnasub_probe divert { type filter hook prerouting priority mangle -1; policy accept; }' \
     'add rule inet xray_remnasub_probe divert meta l4proto udp socket transparent 1 meta mark set 4294967295 accept' \
-    'delete table inet xray_remnasub_probe' | nft --check -f - 2>&1 >/dev/null) && return 0
+    | nft --check -f - 2>&1 >/dev/null) && return 0
+  # delete table в конце пачки убран намеренно: при --check транзакция и так
+  # не коммитится, а удаление только что добавленной таблицы часть версий nft
+  # отвергает, и проба падала не из-за отсутствия TPROXY в ядре.
   [ -n "$NFT_PROBE_ERROR" ] || NFT_PROBE_ERROR='the kernel rejected the TPROXY probe ruleset'
   return 1
 }

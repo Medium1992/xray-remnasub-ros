@@ -919,6 +919,15 @@ if command -v nft >/dev/null 2>&1 && nft list tables >/dev/null 2>&1; then
 else
   printf 'iptables\n' > "$RUNTIME_DIR/firewall.backend"
 fi
+# Во что развернётся auto, решает проба возможностей ядра, а она стоит запуска
+# nft. Возможности ядра в рантайме не меняются, поэтому проба делается один
+# раз здесь, а панель читает готовый ответ и показывает настоящий режим, а не
+# слово auto.
+if LISTENER_MODE=auto /scripts/network.sh resolve > "$RUNTIME_DIR/listener.auto" 2>> "$RUNTIME_DIR/network.log"; then
+  :
+else
+  printf 'redir-tun\n' > "$RUNTIME_DIR/listener.auto"
+fi
 
 # md5crypt от admin. Умолчание задокументировано в README, как в соседних
 # контейнерах: панель должна открываться сразу после установки, а смена пароля

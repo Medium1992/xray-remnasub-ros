@@ -97,6 +97,12 @@
   --toast-error-bg: #5a252b;
   --toast-error-content: #ffd4d7;
 
+  --json-key: #8fbcf5;
+  --json-str: #c3e79a;
+  --json-num: #e6b06a;
+  --json-bool: #d7a2ef;
+  --json-null: #8b9686;
+
   --scrim: rgba(5, 8, 12, .78);
   --shadow: 0 1px 2px rgba(0, 0, 0, .18), 0 8px 24px rgba(0, 0, 0, .08);
   --shadow-modal: 0 16px 44px rgba(0, 0, 0, .48);
@@ -434,6 +440,11 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .profile-editor-alert b { color: var(--error-heading); font-size: 11px; }
 .profile-editor-alert p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.5 ui-monospace, Consolas, monospace; }
 .json-viewer { tab-size: 2; cursor: text; user-select: text; }
+.json-viewer .j-key { color: var(--json-key); }
+.json-viewer .j-str { color: var(--json-str); }
+.json-viewer .j-num { color: var(--json-num); }
+.json-viewer .j-bool { color: var(--json-bool); font-weight: 600; }
+.json-viewer .j-null { color: var(--json-null); font-style: italic; }
 .json-viewer::selection { color: var(--primary-content); background: rgba(var(--primary-rgb), .72); }
 .events-modal-body { display: flex; flex-direction: column; gap: 10px; }
 .events-modal-body .config-viewer { height: 0; flex: 1 1 0; }
@@ -641,6 +652,9 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 
   --toast-bg: #263420; --toast-content: #eaf3e4;
   --toast-error-bg: #7d2a30; --toast-error-content: #ffe2e4;
+
+  --json-key: #1f6091; --json-str: #3d7519; --json-num: #98530d;
+  --json-bool: #71339c; --json-null: #6e7a68;
 
   --scrim: rgba(24, 33, 22, .34);
   --shadow: 0 1px 2px rgba(24, 33, 22, .07), 0 8px 24px rgba(24, 33, 22, .06);

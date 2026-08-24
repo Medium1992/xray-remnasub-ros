@@ -269,7 +269,15 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .config-row-select { min-width: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr) 64px; align-items: center; gap: 11px; padding: 8px 12px 8px 0; border: 0; color: inherit; background: transparent; text-align: left; }
 .config-row-select:disabled { cursor: default; opacity: 1; }
 .config-row-index { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--muted); background: var(--base-300); font: 700 10px/1 ui-monospace, Consolas, monospace; }
+/* Флаг занимает ту же клетку, что и номер, но без плашки: цветной эмодзи на
+   заливке акцента выглядит грязно, а размер держим прежним, чтобы строки не
+   разъезжались между конфигурациями с флагом и без. */
+/* Семейство задаётся целиком: базовое правило ставит шрифт сокращением `font`,
+   а оно сбрасывает family на моноширинный, и флаг вырождался в буквы кода
+   страны. Twemoji Flags лежит в образе и покрывает regional indicators. */
+.config-row-index.flag { background: transparent; font: 400 19px/1 "Twemoji Flags", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; }
 .config-row.selected .config-row-index { color: var(--primary-content); background: var(--primary); }
+.config-row.selected .config-row-index.flag, .config-row.switching .config-row-index.flag { background: transparent; animation: none; }
 .config-row-copy { min-width: 0; display: grid; gap: 3px; }
 .config-row-copy strong, .config-row-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .config-row-copy strong { color: var(--strong); font-size: 11px; }

@@ -41,14 +41,14 @@ FROM ${TARGETOS}-${TARGETARCH}${TARGETVARIANT}
 ARG TARGETARCH
 ARG TARGETVARIANT
 COPY --from=package /final /
-# nftables ставится только на arm64 и amd64: в ядре RouterOS они появились с
-# 7.21 и только на этих архитектурах. iptables-legacy ставится везде, потому
-# что на роутере с более старой прошивкой nftables не будет и там, а обычный
-# iptables в Alpine собран поверх nftables. На armv7 legacy-симлинки нужны
-# всегда, поэтому проставлены прямо здесь; на arm64 и amd64 это решается при
-# старте контейнера по наличию модуля nf_tables.
+# На arm64 и amd64 в образ идёт только nftables: в ядре RouterOS они есть с
+# 7.21 и только на этих архитектурах. iptables там понадобится лишь тому, кто
+# поставил контейнер на прошивку постарше, поэтому он не вшивается, а
+# докачивается entrypoint-ом по наличию модуля nf_tables — образ не должен
+# нести полтора мегабайта, нужные меньшинству. На armv7 наоборот: nftables в
+# ядре не будет никогда, там iptables с legacy-симлинками ставится сразу.
 RUN if [ "$TARGETARCH" = amd64 ] || [ "$TARGETARCH" = arm64 ]; then \
-      apk add --no-cache busybox-extras ca-certificates iproute2 iptables iptables-legacy jq nftables openssl tzdata; \
+      apk add --no-cache busybox-extras ca-certificates iproute2 jq nftables openssl tzdata; \
     elif [ "$TARGETARCH/$TARGETVARIANT" = arm/v7 ]; then \
       apk add --no-cache busybox-extras ca-certificates iproute2 iptables iptables-legacy jq openssl tzdata; \
       ln -sf /usr/sbin/iptables-legacy /usr/sbin/iptables; \

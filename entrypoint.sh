@@ -914,26 +914,39 @@ block_probe || true
 # запускался xray version и nft. Ни версия ядра в образе, ни доступность
 # nftables в ядре роутера в рантайме не меняются, так что вычисляем их один раз.
 xray version 2>/dev/null | head -n1 > "$RUNTIME_DIR/xray.version" || : > "$RUNTIME_DIR/xray.version"
-# nftables в ядре RouterOS появились только в 7.21 и только на arm64 и amd64.
-# На всём остальном перехват идёт через iptables-legacy, а обычный iptables из
-# Alpine собран поверх nftables и на таком ядре просто не работает. Поэтому
-# когда nf_tables нет, штатные имена переставляются на legacy — то же, что
-# делает 05-fw-modules.sh в mihomo-remnasub-ros, только без установки пакетов:
-# они уже лежат в образе. Для armv7 симлинки проставлены ещё при сборке, для
-# armv5 в rootfs других вариантов и нет.
-link_iptables_legacy() {
-  legacy_path=$(command -v iptables-legacy 2>/dev/null) || return 0
-  legacy_dir=${legacy_path%/*}
-  for legacy_tool in '' -save -restore; do
-    [ -x "$legacy_dir/iptables-legacy$legacy_tool" ] || continue
-    ln -sf "$legacy_dir/iptables-legacy$legacy_tool" "$legacy_dir/iptables$legacy_tool" 2>/dev/null || true
-  done
-}
-if command -v nft >/dev/null 2>&1 && { lsmod 2>/dev/null | grep -q nf_tables || nft list tables >/dev/null 2>&1; }; then
-  printf 'nftables\n' > "$RUNTIME_DIR/firewall.backend"
-else
-  link_iptables_legacy
+# Выбор backend по модулю ядра, как в mihomo-proxy-ros. nftables в ядре
+# RouterOS появились с 7.21 и только на arm64 и amd64, поэтому в образе для
+# этих архитектур лежит только nftables: iptables там нужен лишь тому, кто
+# поставил контейнер на прошивку постарше, и докачивается по факту, а не
+# занимает место у всех. На armv7 наоборот — nftables не будет никогда, и
+# iptables с legacy-симлинками стоит прямо в образе. В armv5 нет apk, там
+# rootfs уже содержит нужное.
+if ! lsmod 2>/dev/null | grep -q nf_tables; then
+  if command -v apk >/dev/null 2>&1 && ! apk info -e iptables iptables-legacy >/dev/null 2>&1; then
+    echo 'kernel has no nf_tables, installing iptables'
+    if apk add --no-cache iptables iptables-legacy >/dev/null 2>&1; then
+      rm -f /usr/sbin/iptables /usr/sbin/iptables-save /usr/sbin/iptables-restore
+      ln -s /usr/sbin/iptables-legacy /usr/sbin/iptables
+      ln -s /usr/sbin/iptables-legacy-save /usr/sbin/iptables-save
+      ln -s /usr/sbin/iptables-legacy-restore /usr/sbin/iptables-restore
+    else
+      echo 'could not install iptables; interception will not work without network access on first start' >&2
+    fi
+  fi
   printf 'iptables\n' > "$RUNTIME_DIR/firewall.backend"
+else
+  if command -v apk >/dev/null 2>&1 && ! command -v nft >/dev/null 2>&1; then
+    echo 'kernel has nf_tables, installing nftables'
+    apk add --no-cache nftables >/dev/null 2>&1 || true
+  fi
+  # Удаляем iptables только убедившись, что nft на месте: иначе на armv7,
+  # где nftables в образе нет вовсе, контейнер остался бы вообще без файрвола.
+  if command -v apk >/dev/null 2>&1 && command -v nft >/dev/null 2>&1 &&
+     apk info -e iptables iptables-legacy >/dev/null 2>&1; then
+    echo 'nftables is in use, removing iptables'
+    apk del iptables iptables-legacy >/dev/null 2>&1 || true
+  fi
+  printf 'nftables\n' > "$RUNTIME_DIR/firewall.backend"
 fi
 # Во что развернётся auto, решает проба возможностей ядра, а она стоит запуска
 # nft. Возможности ядра в рантайме не меняются, поэтому проба делается один

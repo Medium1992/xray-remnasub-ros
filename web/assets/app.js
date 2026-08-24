@@ -506,8 +506,9 @@
   function settingsStateSignature() {
     return JSON.stringify([
       model.global_headers_b64, model.listener_mode, model.effective_listener_mode, model.firewall_backend, model.redir_port, model.tproxy_port,
-      model.inbound_strip_socks, model.inbound_strip_http, model.local_inbound_mode, model.local_inbound_port,
-      model.local_inbound_user, model.local_inbound_has_pass,
+      model.inbound_strip_socks, model.inbound_strip_http,
+      model.local_socks_enabled, model.local_socks_port, model.local_socks_user, model.local_socks_has_pass,
+      model.local_http_enabled, model.local_http_port, model.local_http_user, model.local_http_has_pass,
       model.log_level, model.xray_log_error, model.xray_log_access, model.xray_log_dns, model.xray_log_mask_address,
       model.network_qdisc, model.network_disable_ipv6, model.network_disable_multicast,
       model.network_ct_established, model.network_ct_unacknowledged, model.network_ct_syn_sent,
@@ -551,8 +552,8 @@
   }
 
   function updateLocalInboundFields() {
-    const off = $("local-inbound-mode").value === "off";
-    all("[data-local-inbound]").forEach((field) => field.classList.toggle("hidden", off));
+    all("[data-local-socks]").forEach((field) => field.classList.toggle("hidden", !$("local-socks-enabled").checked));
+    all("[data-local-http]").forEach((field) => field.classList.toggle("hidden", !$("local-http-enabled").checked));
   }
 
   function updateGeodataFields() {
@@ -589,12 +590,18 @@
     $("xray-log-level").value = model.log_level || "warning";
     $("inbound-strip-socks").checked = enabled(model.inbound_strip_socks ?? 1);
     $("inbound-strip-http").checked = enabled(model.inbound_strip_http ?? 1);
-    $("local-inbound-mode").value = model.local_inbound_mode || "socks";
-    $("local-inbound-port").value = model.local_inbound_port ?? 1080;
-    $("local-inbound-user").value = model.local_inbound_user || "";
-    $("local-inbound-pass").value = "";
-    $("local-inbound-pass").placeholder = model.local_inbound_has_pass ? "сохранён" : "";
-    $("local-inbound-pass-clear").checked = false;
+    $("local-socks-enabled").checked = enabled(model.local_socks_enabled ?? 1);
+    $("local-socks-port").value = model.local_socks_port ?? 1080;
+    $("local-socks-user").value = model.local_socks_user || "";
+    $("local-socks-pass").value = "";
+    $("local-socks-pass").placeholder = model.local_socks_has_pass ? "сохранён" : "";
+    $("local-socks-pass-clear").checked = false;
+    $("local-http-enabled").checked = enabled(model.local_http_enabled);
+    $("local-http-port").value = model.local_http_port ?? 1081;
+    $("local-http-user").value = model.local_http_user || "";
+    $("local-http-pass").value = "";
+    $("local-http-pass").placeholder = model.local_http_has_pass ? "сохранён" : "";
+    $("local-http-pass-clear").checked = false;
     updateLocalInboundFields();
     $("xray-log-error").value = model.xray_log_error || "/dev/stderr";
     $("xray-log-access").value = model.xray_log_access || "/dev/stdout";
@@ -975,11 +982,16 @@
         log_level: $("xray-log-level").value,
         inbound_strip_socks: $("inbound-strip-socks").checked ? "1" : "0",
         inbound_strip_http: $("inbound-strip-http").checked ? "1" : "0",
-        local_inbound_mode: $("local-inbound-mode").value,
-        local_inbound_port: $("local-inbound-port").value,
-        local_inbound_user: $("local-inbound-user").value.trim(),
-        local_inbound_pass: $("local-inbound-pass").value,
-        local_inbound_pass_clear: $("local-inbound-pass-clear").checked ? "1" : "0",
+        local_socks_enabled: $("local-socks-enabled").checked ? "1" : "0",
+        local_socks_port: $("local-socks-port").value,
+        local_socks_user: $("local-socks-user").value.trim(),
+        local_socks_pass: $("local-socks-pass").value,
+        local_socks_pass_clear: $("local-socks-pass-clear").checked ? "1" : "0",
+        local_http_enabled: $("local-http-enabled").checked ? "1" : "0",
+        local_http_port: $("local-http-port").value,
+        local_http_user: $("local-http-user").value.trim(),
+        local_http_pass: $("local-http-pass").value,
+        local_http_pass_clear: $("local-http-pass-clear").checked ? "1" : "0",
         xray_log_error: $("xray-log-error").value.trim(),
         xray_log_access: $("xray-log-access").value.trim(),
         xray_log_dns: $("xray-log-dns").checked ? "1" : "0",
@@ -1145,7 +1157,8 @@
   all('input[name="listener-mode"]').forEach((input) => input.addEventListener("change", updateListenerDescription));
   all('input[name="geodata-storage"]').forEach((input) => input.addEventListener("change", updateGeodataFields));
   $("xray-sniffing-enabled").addEventListener("change", updateSniffingFields);
-  $("local-inbound-mode").addEventListener("change", updateLocalInboundFields);
+  $("local-socks-enabled").addEventListener("change", updateLocalInboundFields);
+  $("local-http-enabled").addEventListener("change", updateLocalInboundFields);
   // Переключатель перерисовывает список из того, что сейчас в редакторе, а не
   // из модели: иначе несохранённые правки пропали бы. Выключение убирает
   // обязательные строки, поэтому после сохранения они исчезают и из состояния,

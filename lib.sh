@@ -549,10 +549,14 @@ load_settings() {
     read -r GEODATA_STORAGE
     read -r INBOUND_STRIP_SOCKS
     read -r INBOUND_STRIP_HTTP
-    read -r LOCAL_INBOUND_MODE
-    read -r LOCAL_INBOUND_PORT
-    read -r LOCAL_INBOUND_USER_B64
-    read -r LOCAL_INBOUND_PASS_B64
+    read -r LOCAL_SOCKS_ENABLED
+    read -r LOCAL_SOCKS_PORT
+    read -r LOCAL_SOCKS_USER_B64
+    read -r LOCAL_SOCKS_PASS_B64
+    read -r LOCAL_HTTP_ENABLED
+    read -r LOCAL_HTTP_PORT
+    read -r LOCAL_HTTP_USER_B64
+    read -r LOCAL_HTTP_PASS_B64
     read -r UI_THEME
     read -r UI_ACCENT
   } <<EOF
@@ -566,7 +570,8 @@ $(state_load "$STATE" \
   XRAY_SNIFFING_ENABLED XRAY_SNIFFING_ROUTE_ONLY \
   XRAY_PROBE_URL_B64 XRAY_PROBE_TIMEOUT_SECONDS XRAY_PROBE_HTTP_METHOD \
   GEODATA_STORAGE INBOUND_STRIP_SOCKS INBOUND_STRIP_HTTP \
-  LOCAL_INBOUND_MODE LOCAL_INBOUND_PORT LOCAL_INBOUND_USER_B64 LOCAL_INBOUND_PASS_B64 \
+  LOCAL_SOCKS_ENABLED LOCAL_SOCKS_PORT LOCAL_SOCKS_USER_B64 LOCAL_SOCKS_PASS_B64 \
+  LOCAL_HTTP_ENABLED LOCAL_HTTP_PORT LOCAL_HTTP_USER_B64 LOCAL_HTTP_PASS_B64 \
   UI_THEME UI_ACCENT)
 EOF
 
@@ -609,11 +614,17 @@ EOF
   # а чужой socks на неизвестном порту — это открытый прокси на роутере.
   case "$INBOUND_STRIP_SOCKS" in 0) ;; *) INBOUND_STRIP_SOCKS=1 ;; esac
   case "$INBOUND_STRIP_HTTP" in 0) ;; *) INBOUND_STRIP_HTTP=1 ;; esac
-  # В Xray `mixed` — это алиас того же SocksServerConfig, что и `socks`,
-  # поэтому режим хранится под именем socks, а протокол в конфигурации
-  # пишется как socks.
-  case "$LOCAL_INBOUND_MODE" in off|socks|http) ;; *) LOCAL_INBOUND_MODE=socks ;; esac
-  valid_number "$LOCAL_INBOUND_PORT" && [ "$LOCAL_INBOUND_PORT" -ge 1 ] && [ "$LOCAL_INBOUND_PORT" -le 65535 ] || LOCAL_INBOUND_PORT=1080
+  # SOCKS и HTTP независимы: кому-то нужны оба сразу, и выбор «или-или» здесь
+  # был бы искусственным ограничением. В Xray `mixed` — лишь алиас того же
+  # SocksServerConfig, поэтому SOCKS-вход пишется протоколом `socks`.
+  case "$LOCAL_SOCKS_ENABLED" in 0) ;; *) LOCAL_SOCKS_ENABLED=1 ;; esac
+  case "$LOCAL_HTTP_ENABLED" in 1) ;; *) LOCAL_HTTP_ENABLED=0 ;; esac
+  valid_number "$LOCAL_SOCKS_PORT" && [ "$LOCAL_SOCKS_PORT" -ge 1 ] && [ "$LOCAL_SOCKS_PORT" -le 65535 ] || LOCAL_SOCKS_PORT=1080
+  valid_number "$LOCAL_HTTP_PORT" && [ "$LOCAL_HTTP_PORT" -ge 1 ] && [ "$LOCAL_HTTP_PORT" -le 65535 ] || LOCAL_HTTP_PORT=1081
+  # Два входа на одном порту Xray не поднимет, а конфигурация упадёт уже после
+  # сборки — проще не дать им совпасть здесь.
+  [ "$LOCAL_HTTP_ENABLED" = 0 ] || [ "$LOCAL_SOCKS_ENABLED" = 0 ] ||
+    [ "$LOCAL_HTTP_PORT" != "$LOCAL_SOCKS_PORT" ] || LOCAL_HTTP_ENABLED=0
   valid_theme "$UI_THEME" || UI_THEME=auto
   valid_accent "$UI_ACCENT" || UI_ACCENT=
 }
@@ -654,10 +665,14 @@ XRAY_PROBE_HTTP_METHOD=$XRAY_PROBE_HTTP_METHOD
 GEODATA_STORAGE=$GEODATA_STORAGE
 INBOUND_STRIP_SOCKS=$INBOUND_STRIP_SOCKS
 INBOUND_STRIP_HTTP=$INBOUND_STRIP_HTTP
-LOCAL_INBOUND_MODE=$LOCAL_INBOUND_MODE
-LOCAL_INBOUND_PORT=$LOCAL_INBOUND_PORT
-LOCAL_INBOUND_USER_B64=$LOCAL_INBOUND_USER_B64
-LOCAL_INBOUND_PASS_B64=$LOCAL_INBOUND_PASS_B64
+LOCAL_SOCKS_ENABLED=$LOCAL_SOCKS_ENABLED
+LOCAL_SOCKS_PORT=$LOCAL_SOCKS_PORT
+LOCAL_SOCKS_USER_B64=$LOCAL_SOCKS_USER_B64
+LOCAL_SOCKS_PASS_B64=$LOCAL_SOCKS_PASS_B64
+LOCAL_HTTP_ENABLED=$LOCAL_HTTP_ENABLED
+LOCAL_HTTP_PORT=$LOCAL_HTTP_PORT
+LOCAL_HTTP_USER_B64=$LOCAL_HTTP_USER_B64
+LOCAL_HTTP_PASS_B64=$LOCAL_HTTP_PASS_B64
 UI_THEME=$UI_THEME
 UI_ACCENT=$UI_ACCENT
 EOF
@@ -987,7 +1002,7 @@ build_xray_config() {
   fi
 
   if ! build_reserved_inbound_tag=$(jq -r '
-       ["xray-remnasub-local", "xray-remnasub-tcp", "xray-remnasub-udp", "xray-remnasub-tproxy", "xray-remnasub-tun"] as $reserved |
+       ["xray-remnasub-socks", "xray-remnasub-http", "xray-remnasub-tcp", "xray-remnasub-udp", "xray-remnasub-tproxy", "xray-remnasub-tun"] as $reserved |
        ([.inbounds[]?.tag? |
          select(type == "string") |
          . as $tag |
@@ -1048,25 +1063,33 @@ build_xray_config() {
        --argjson sniffing_enabled "$build_sniffing" \
        --argjson route_only "$build_route_only" \
        --argjson fakedns "$build_fakedns" \
-       --arg local_mode "$LOCAL_INBOUND_MODE" \
-       --argjson local_port "$LOCAL_INBOUND_PORT" \
-       --arg local_user "$(b64_decode "$LOCAL_INBOUND_USER_B64")" \
-       --arg local_pass "$(b64_decode "$LOCAL_INBOUND_PASS_B64")" '
+       --argjson socks_enabled "$LOCAL_SOCKS_ENABLED" \
+       --argjson socks_port "$LOCAL_SOCKS_PORT" \
+       --arg socks_user "$(b64_decode "$LOCAL_SOCKS_USER_B64")" \
+       --arg socks_pass "$(b64_decode "$LOCAL_SOCKS_PASS_B64")" \
+       --argjson http_enabled "$LOCAL_HTTP_ENABLED" \
+       --argjson http_port "$LOCAL_HTTP_PORT" \
+       --arg http_user "$(b64_decode "$LOCAL_HTTP_USER_B64")" \
+       --arg http_pass "$(b64_decode "$LOCAL_HTTP_PASS_B64")" '
        def managed_sniffing: {
          enabled:$sniffing_enabled,
          destOverride:(["http","tls","quic"] + (if $fakedns then ["fakedns"] else [] end)),
          metadataOnly:false,
          routeOnly:$route_only
        };
-       {inbounds:((if $local_mode == "off" then [] else [
-         {tag:"xray-remnasub-local",port:$local_port,protocol:$local_mode,
-          settings:(if $local_mode == "socks"
-                    then {udp:true} + (if $local_user == "" then {auth:"noauth"}
-                                       else {auth:"password",accounts:[{user:$local_user,pass:$local_pass}]} end)
-                    else (if $local_user == "" then {}
-                          else {accounts:[{user:$local_user,pass:$local_pass}]} end) end),
+       (if $socks_enabled == 1 then [
+         {tag:"xray-remnasub-socks",port:$socks_port,protocol:"socks",
+          settings:({udp:true} + (if $socks_user == "" then {auth:"noauth"}
+                                  else {auth:"password",accounts:[{user:$socks_user,pass:$socks_pass}]} end)),
           sniffing:managed_sniffing}
-       ] end) + if $listener_mode == "tproxy" then [
+       ] else [] end) as $socks_inbound |
+       (if $http_enabled == 1 then [
+         {tag:"xray-remnasub-http",port:$http_port,protocol:"http",
+          settings:(if $http_user == "" then {}
+                    else {accounts:[{user:$http_user,pass:$http_pass}]} end),
+          sniffing:managed_sniffing}
+       ] else [] end) as $http_inbound |
+       {inbounds:($socks_inbound + $http_inbound + if $listener_mode == "tproxy" then [
          {tag:"xray-remnasub-tproxy",port:$tproxy_port,protocol:"dokodemo-door",settings:{network:"tcp,udp",followRedirect:true},streamSettings:{sockopt:{tproxy:"tproxy"}},sniffing:managed_sniffing}
        ] elif $listener_mode == "redir-tproxy" then [
          {tag:"xray-remnasub-tcp",port:$redir_port,protocol:"dokodemo-door",settings:{network:"tcp",followRedirect:true},streamSettings:{sockopt:{tproxy:"redirect"}},sniffing:managed_sniffing},

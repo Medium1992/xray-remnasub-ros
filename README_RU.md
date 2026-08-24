@@ -221,7 +221,9 @@ Xray обновляет geodata сам: `app/geodata` заводит плани�
 | `tproxy` | TPROXY `12346` | TPROXY `12346` | nftables |
 | `redir-tun` | REDIR `12345` | TUN `Xray` | nftables либо iptables-legacy |
 
-Если nftables доступен, но ядро не поддерживает TPROXY, на `amd64` и `arm64` используется nftables с REDIR + TUN. На ядре без nftables, а также на `armv7` и `armv5`, используется iptables-legacy. Контейнер удаляет только собственные таблицы/цепочки и не выполняет `nft flush ruleset` или очистку базовых iptables chains.
+nftables появились в ядре RouterOS начиная с 7.21 и только на `arm64` и `amd64`. Там `auto` выбирает REDIR + TPROXY. На более старых версиях, а также на `armv7` и `armv5`, ядро nftables не умеет, и перехват идёт через iptables-legacy с режимом REDIR + TUN.
+
+Обычный `iptables` в Alpine собран поверх nftables и на ядре без `nf_tables` не работает, поэтому при старте контейнер проверяет наличие модуля и, если его нет, переставляет `iptables`, `iptables-save` и `iptables-restore` на legacy-варианты. Пакеты для этого уже лежат в образе, ничего не докачивается. Контейнер удаляет только собственные таблицы и цепочки и не выполняет `nft flush ruleset` или очистку базовых iptables chains.
 
 MPTCP перехватить нельзя, поэтому оба backend роняют TCP-опцию 30 на LAN-интерфейсе, и клиент откатывается на обычный TCP. В nftables это правило стоит в собственной цепочке, в iptables — в `mangle PREROUTING`, потому что `DROP` в таблице `nat` запрещён.
 

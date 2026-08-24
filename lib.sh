@@ -617,7 +617,7 @@ EOF
   # SOCKS и HTTP независимы: кому-то нужны оба сразу, и выбор «или-или» здесь
   # был бы искусственным ограничением. В Xray `mixed` — лишь алиас того же
   # SocksServerConfig, поэтому SOCKS-вход пишется протоколом `socks`.
-  case "$LOCAL_SOCKS_ENABLED" in 0) ;; *) LOCAL_SOCKS_ENABLED=1 ;; esac
+  case "$LOCAL_SOCKS_ENABLED" in 1) ;; *) LOCAL_SOCKS_ENABLED=0 ;; esac
   case "$LOCAL_HTTP_ENABLED" in 1) ;; *) LOCAL_HTTP_ENABLED=0 ;; esac
   valid_number "$LOCAL_SOCKS_PORT" && [ "$LOCAL_SOCKS_PORT" -ge 1 ] && [ "$LOCAL_SOCKS_PORT" -le 65535 ] || LOCAL_SOCKS_PORT=1080
   valid_number "$LOCAL_HTTP_PORT" && [ "$LOCAL_HTTP_PORT" -ge 1 ] && [ "$LOCAL_HTTP_PORT" -le 65535 ] || LOCAL_HTTP_PORT=1081

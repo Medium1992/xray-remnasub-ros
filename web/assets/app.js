@@ -590,7 +590,7 @@
     $("xray-log-level").value = model.log_level || "warning";
     $("inbound-strip-socks").checked = enabled(model.inbound_strip_socks ?? 1);
     $("inbound-strip-http").checked = enabled(model.inbound_strip_http ?? 1);
-    $("local-socks-enabled").checked = enabled(model.local_socks_enabled ?? 1);
+    $("local-socks-enabled").checked = enabled(model.local_socks_enabled);
     $("local-socks-port").value = model.local_socks_port ?? 1080;
     $("local-socks-user").value = model.local_socks_user || "";
     $("local-socks-pass").value = "";
@@ -721,6 +721,40 @@
     }
   }
 
+  // Подсветка JSON. Токенизируем исходный текст, а экранируем уже каждый
+  // кусок отдельно: если сначала экранировать всё, кавычки станут &quot; и
+  // строки перестанут находиться. Цвета задаются классами — инлайн-стиль
+  // страница не пропустит, у неё CSP style-src 'self'.
+  const JSON_TOKEN = /"(?:\\.|[^"\\])*"|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+  const JSON_HIGHLIGHT_LIMIT = 400000;
+
+  function highlightJson(text) {
+    let out = "";
+    let last = 0;
+    for (const match of text.matchAll(JSON_TOKEN)) {
+      const token = match[0];
+      out += escapeHtml(text.slice(last, match.index));
+      let className;
+      if (token.startsWith('"')) className = /^\s*:/.test(text.slice(match.index + token.length)) ? "j-key" : "j-str";
+      else if (token === "null") className = "j-null";
+      else if (token === "true" || token === "false") className = "j-bool";
+      else className = "j-num";
+      out += `<span class="${className}">${escapeHtml(token)}</span>`;
+      last = match.index + token.length;
+    }
+    return out + escapeHtml(text.slice(last));
+  }
+
+  function showJson(viewer, text) {
+    // Очень большой ответ не подсвечиваем: разметка на каждый токен утяжеляет
+    // DOM сильнее, чем стоит удобство, а роутер не самый быстрый.
+    if (text.length > JSON_HIGHLIGHT_LIMIT) {
+      viewer.textContent = text;
+      return;
+    }
+    viewer.innerHTML = highlightJson(text);
+  }
+
   async function openJsonModal(kind, profileId = model.active_profile_id) {
     const profile = profileById(profileId);
     if (!profile) return toast("Профиль не выбран", "error");
@@ -733,7 +767,7 @@
     layer.dataset.profileId = profileId;
     layer.classList.remove("hidden");
     try {
-      viewer.textContent = await readProfileJson(kind, profileId);
+      showJson(viewer, await readProfileJson(kind, profileId));
     } catch (error) {
       viewer.textContent = `Ошибка загрузки: ${error.message}`;
     }

@@ -136,7 +136,7 @@
     if (profile.id === ui.selectingProfileId) return { className: "warning busy", label: "Переключение..." };
     const active = profile.id === model.active_profile_id;
     if (profile.status === "working" || profile.refresh_state === "working") {
-      const stages = { queued: "В очереди...", download: "Загрузка...", metadata: "Чтение заголовков...", validation: "Проверка JSON...", build: "Подготовка конфигурации...", install: "Установка...", apply: "Применение...", ready: "Готово" };
+      const stages = { queued: "В очереди...", download: "Загрузка подписки...", metadata: "Чтение заголовков...", geodata: "Загрузка geodata...", validation: "Проверка конфигурации...", build: "Подготовка конфигурации...", install: "Установка...", apply: "Применение...", ready: "Готово" };
       return { className: "warning busy", label: stages[profile.refresh_stage] || decode(profile.status_message_b64) || "Обновление..." };
     }
     if (enabled(profile.fail_closed)) return { className: "error", label: "Доступ ограничен" };

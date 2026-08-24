@@ -1019,6 +1019,7 @@ build_xray_config() {
   fi
 
   build_geodata_log=$build_metadata/geodata.prepare.log
+  set_status "$build_id" working 'Подготовка geodata' geodata
   event_log INFO "$build_id" 'preparing geodata assets'
   if ! /scripts/geodata.sh prepare \
        "$BUILD_CANDIDATE_DIR/10-subscription.json" \
@@ -1106,6 +1107,7 @@ build_xray_config() {
   chmod 700 "$BUILD_CANDIDATE_DIR" "$build_metadata" 2>/dev/null || true
   chmod 600 "$BUILD_CANDIDATE_DIR/10-subscription.json" "$BUILD_CANDIDATE_DIR/70-container-geodata-tail.json" "$BUILD_CANDIDATE_DIR/80-container-log.json" "$BUILD_CANDIDATE_DIR/90-container-inbounds.json" "$build_metadata/configs.json" "$build_metadata/geodata.json" "$build_metadata/listener.json" "$build_metadata/source.sha256" 2>/dev/null || true
 
+  set_status "$build_id" working 'Проверка конфигурации' validation
   event_log INFO "$build_id" 'validating the assembled configuration with xray run -test'
   if ! XRAY_LOCATION_ASSET="$build_asset_dir" xray run -test -confdir "$BUILD_CANDIDATE_DIR" > "$build_validation" 2>&1; then
     BUILD_ERROR=$(tail -n 20 "$build_validation" | tr '\n' ' ' | head -c 4096)

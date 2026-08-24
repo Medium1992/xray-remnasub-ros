@@ -873,10 +873,17 @@ supervisor() {
       [ "$STOPPING" = 0 ] || break
       continue
     fi
+    # Готовность ядра проверяется по перехватывающему входу: он есть в любом
+    # режиме, а локальные SOCKS и HTTP необязательны и по умолчанию выключены.
+    if [ "$runtime_listener_mode" = tproxy ]; then
+      xray_ready_port=$runtime_tproxy_port
+    else
+      xray_ready_port=$runtime_redir_port
+    fi
     xray_ready=0
     startup_attempt=0
     while [ "$startup_attempt" -lt 300 ] && kill -0 "$XRAY_PID" 2>/dev/null; do
-      if nc -z -w 1 127.0.0.1 1080 >/dev/null 2>&1; then
+      if nc -z -w 1 127.0.0.1 "$xray_ready_port" >/dev/null 2>&1; then
         xray_ready=1
         break
       fi
@@ -884,6 +891,7 @@ supervisor() {
       sleep 0.1
     done
     if [ "$xray_ready" != 1 ]; then
+      event_log ERROR "$ACTIVE_PROFILE_ID" "Xray did not start listening on port $xray_ready_port"
       kill -0 "$XRAY_PID" 2>/dev/null && terminate_xray "$XRAY_PID"
       wait "$XRAY_PID" || true
       XRAY_PID=

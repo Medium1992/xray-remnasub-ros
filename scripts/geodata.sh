@@ -473,15 +473,16 @@ prepare() {
     . as $config |
     # Ссылки на геобазы могут стоять не только в routing.rules, но и в
     # dns.servers.domains и expectIPs, поэтому ищем по всей конфигурации.
-    ([.. | strings] | any(
+    (del(.geodata) | [.. | strings] | any(
        startswith("geoip:") or startswith("geosite:") or
        startswith("ext:") or startswith("ext-ip:"))) as $needs_geodata |
-    if has("geodata") and .geodata != null then
-      {generated:false,geodata:.geodata,added_outbounds:[]}
-    elif $needs_geodata | not then
-      # Конфигурация нигде не ссылается на geoip и geosite — качать под неё
-      # двадцать семь мегабайт незачем.
+    if $needs_geodata | not then
+      # Ни одной ссылки на геобазы — файлы читать некому. Своя секция geodata
+      # из подписки в этом случае тоже не нужна: она только заставит ядро
+      # ждать скачивания того, к чему никто не обратится.
       {generated:false,geodata:null,added_outbounds:[]}
+    elif has("geodata") and .geodata != null then
+      {generated:false,geodata:.geodata,added_outbounds:[]}
     else
       ([.outbounds[]?.tag? | select(type == "string")]) as $used |
       (any(.outbounds[]?; .tag? == "direct" and (((.protocol? // "") | ascii_downcase) == "freedom"))) as $direct |

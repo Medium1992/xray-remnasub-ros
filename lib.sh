@@ -1050,6 +1050,28 @@ build_xray_config() {
     return 1
   fi
 
+  # Секция geodata из подписки удаляется, когда на геобазы никто не ссылается.
+  # Оверлей идёт после фрагмента подписки и её собственную секцию не отменяет,
+  # поэтому убирать надо здесь — иначе ядро всё равно потребует файлы при
+  # разборе конфигурации и старт будет ждать их скачивания. Тот же признак
+  # проверяет geodata.sh; здесь он нужен раньше, до подготовки ассетов.
+  if ! jq -e 'del(.geodata) | [.. | strings] | any(
+        startswith("geoip:") or startswith("geosite:") or
+        startswith("ext:") or startswith("ext-ip:"))' \
+       "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1 &&
+     jq -e 'has("geodata") and .geodata != null' \
+       "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1; then
+    build_geodata_strip=$RUNTIME_DIR/$build_id.geodata-strip.$$.json
+    if ! jq 'del(.geodata)' "$BUILD_CANDIDATE_DIR/10-subscription.json" > "$build_geodata_strip" ||
+       ! mv "$build_geodata_strip" "$BUILD_CANDIDATE_DIR/10-subscription.json"; then
+      rm -f "$build_geodata_strip"
+      BUILD_ERROR='Could not drop the unused geodata section'
+      discard_build_candidate
+      return 1
+    fi
+    event_log INFO "$build_id" 'nothing references geoip or geosite; the geodata section was dropped'
+  fi
+
   build_geodata_log=$build_metadata/geodata.prepare.log
   set_status "$build_id" working 'Подготовка geodata' geodata
   event_log INFO "$build_id" 'preparing geodata assets'

@@ -173,7 +173,7 @@ Xray refreshes geodata itself. Its built-in scheduler honours `geodata.cron`, do
 
 What the container does own is the gap Xray leaves: if an asset file does not exist when the core starts, Xray neither downloads nor creates it — it simply fails to parse the configuration. So the container bootstraps missing assets before `xray run -test`, and only that. An existing file is never re-downloaded and never even touched.
 
-When the selected JSON already has `geodata`, its cron, assets and outbound are preserved. Otherwise the container adds the Loyalsoldier `geoip.dat` and `geosite.dat` releases with schedule `0 4 * * *` and outbound `direct`. If `direct` is unavailable or belongs to a non-`freedom` outbound, a tagged `freedom` is reused or a dedicated helper is appended without changing the original outbound order.
+When the selected JSON already has `geodata`, its cron, assets and outbound are preserved. Otherwise the container adds a section only if the configuration references `geoip:` or `geosite:` somewhere — in routing rules, in `dns.servers`, or through `ext:`. A configuration that needs no geo databases downloads nothing. When it does, the Loyalsoldier `geoip.dat` and `geosite.dat` releases are added with schedule `0 4 * * *` and outbound `direct`. If `direct` is unavailable or belongs to a non-`freedom` outbound, a tagged `freedom` is reused or a dedicated helper is appended without changing the original outbound order.
 
 Loyalsoldier URLs are verified against their adjacent `.sha256sum` files. Custom assets must use HTTPS, a safe relative path, and stay under 128 MiB per file.
 

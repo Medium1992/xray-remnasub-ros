@@ -471,8 +471,17 @@ prepare() {
       ((explode | any(.[]; ascii_space)) | not) and
       (.[8:] | split("/")[0] | split("?")[0] | split("#")[0] | length > 0);
     . as $config |
+    # Ссылки на геобазы могут стоять не только в routing.rules, но и в
+    # dns.servers.domains и expectIPs, поэтому ищем по всей конфигурации.
+    ([.. | strings] | any(
+       startswith("geoip:") or startswith("geosite:") or
+       startswith("ext:") or startswith("ext-ip:"))) as $needs_geodata |
     if has("geodata") and .geodata != null then
       {generated:false,geodata:.geodata,added_outbounds:[]}
+    elif $needs_geodata | not then
+      # Конфигурация нигде не ссылается на geoip и geosite — качать под неё
+      # двадцать семь мегабайт незачем.
+      {generated:false,geodata:null,added_outbounds:[]}
     else
       ([.outbounds[]?.tag? | select(type == "string")]) as $used |
       (any(.outbounds[]?; .tag? == "direct" and (((.protocol? // "") | ascii_downcase) == "freedom"))) as $direct |
@@ -590,6 +599,9 @@ prepare() {
   fi
 
   generated=$(jq -r '.generated' "$manifest_json")
+  if [ "$(jq -r '.geodata == null' "$manifest_json")" = true ]; then
+    progress 'configuration does not reference geoip or geosite; no assets needed'
+  fi
   while IFS="$(printf '\t')" read -r asset_file asset_url; do
     asset_target=$ASSET_DIR/$asset_file
     path_is_safe "$ASSET_DIR" "$asset_file" || fail "Unsafe geodata asset target: $asset_file"
@@ -642,7 +654,8 @@ EOF
 
   overlay_temp=$work_dir/overlay.json
   jq -n --arg asset_dir "$ASSET_DIR" --slurpfile manifest "$manifest_json" '
-    {env:{"xray.location.asset":$asset_dir},geodata:$manifest[0].geodata} +
+    {env:{"xray.location.asset":$asset_dir}} +
+    (if $manifest[0].geodata == null then {} else {geodata:$manifest[0].geodata} end) +
     (if ($manifest[0].added_outbounds | length) > 0 then {outbounds:$manifest[0].added_outbounds} else {} end)
   ' > "$overlay_temp"
 

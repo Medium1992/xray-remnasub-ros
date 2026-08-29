@@ -547,6 +547,8 @@ load_settings() {
     read -r XRAY_PROBE_TIMEOUT_SECONDS
     read -r XRAY_PROBE_HTTP_METHOD
     read -r GEODATA_STORAGE
+    read -r DNS_OVERRIDE_ENABLED
+    read -r DNS_OVERRIDE_B64
     read -r INBOUND_STRIP_SOCKS
     read -r INBOUND_STRIP_HTTP
     read -r LOCAL_SOCKS_ENABLED
@@ -569,7 +571,7 @@ $(state_load "$STATE" \
   NETWORK_CT_UNACKNOWLEDGED NETWORK_CT_UDP_STREAM \
   XRAY_SNIFFING_ENABLED XRAY_SNIFFING_ROUTE_ONLY \
   XRAY_PROBE_URL_B64 XRAY_PROBE_TIMEOUT_SECONDS XRAY_PROBE_HTTP_METHOD \
-  GEODATA_STORAGE INBOUND_STRIP_SOCKS INBOUND_STRIP_HTTP \
+  GEODATA_STORAGE DNS_OVERRIDE_ENABLED DNS_OVERRIDE_B64 INBOUND_STRIP_SOCKS INBOUND_STRIP_HTTP \
   LOCAL_SOCKS_ENABLED LOCAL_SOCKS_PORT LOCAL_SOCKS_USER_B64 LOCAL_SOCKS_PASS_B64 \
   LOCAL_HTTP_ENABLED LOCAL_HTTP_PORT LOCAL_HTTP_USER_B64 LOCAL_HTTP_PASS_B64 \
   UI_THEME UI_ACCENT)
@@ -610,6 +612,7 @@ EOF
   valid_number "$XRAY_PROBE_TIMEOUT_SECONDS" && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -ge 1 ] && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -le 30 ] || XRAY_PROBE_TIMEOUT_SECONDS=5
   case "$XRAY_PROBE_HTTP_METHOD" in GET|HEAD) ;; *) XRAY_PROBE_HTTP_METHOD=HEAD ;; esac
   case "$GEODATA_STORAGE" in memory|persistent) ;; *) GEODATA_STORAGE=memory ;; esac
+  case "$DNS_OVERRIDE_ENABLED" in 1) ;; *) DNS_OVERRIDE_ENABLED=0 ;; esac
   # Локальные входы из подписки по умолчанию вырезаются: перехват здесь свой,
   # а чужой socks на неизвестном порту — это открытый прокси на роутере.
   case "$INBOUND_STRIP_SOCKS" in 0) ;; *) INBOUND_STRIP_SOCKS=1 ;; esac
@@ -663,6 +666,8 @@ XRAY_PROBE_URL_B64=$XRAY_PROBE_URL_B64
 XRAY_PROBE_TIMEOUT_SECONDS=$XRAY_PROBE_TIMEOUT_SECONDS
 XRAY_PROBE_HTTP_METHOD=$XRAY_PROBE_HTTP_METHOD
 GEODATA_STORAGE=$GEODATA_STORAGE
+DNS_OVERRIDE_ENABLED=$DNS_OVERRIDE_ENABLED
+DNS_OVERRIDE_B64=$DNS_OVERRIDE_B64
 INBOUND_STRIP_SOCKS=$INBOUND_STRIP_SOCKS
 INBOUND_STRIP_HTTP=$INBOUND_STRIP_HTTP
 LOCAL_SOCKS_ENABLED=$LOCAL_SOCKS_ENABLED
@@ -901,6 +906,33 @@ build_xray_config() {
       return 1
     fi
     event_log INFO "$build_id" "removed source inbounds: $build_stripped_inbounds"
+  fi
+
+  # Оверрайд DNS заменяет секцию целиком, а не сливается с ней: у Xray
+  # `dns.servers` — массив, и при слиянии серверы провайдера остались бы в
+  # списке, убрать их было бы нечем. Подстановка идёт прямо в фрагмент
+  # подписки, а не отдельным файлом confdir, по той же причине — и заодно
+  # ссылки на geosite: из оверрайда видит определитель нужности geodata.
+  if [ "$DNS_OVERRIDE_ENABLED" = 1 ]; then
+    build_dns_override=$RUNTIME_DIR/$build_id.dns-override.$$.json
+    b64_decode "$DNS_OVERRIDE_B64" > "$build_dns_override"
+    if ! jq -e 'type == "object"' "$build_dns_override" >/dev/null 2>&1; then
+      rm -f "$build_dns_override"
+      BUILD_ERROR='DNS override must be a JSON object'
+      discard_build_candidate
+      return 1
+    fi
+    build_dns_tmp=$RUNTIME_DIR/$build_id.dns-merged.$$.json
+    if ! jq --slurpfile override "$build_dns_override" '.dns = $override[0]' \
+         "$BUILD_CANDIDATE_DIR/10-subscription.json" > "$build_dns_tmp" ||
+       ! mv "$build_dns_tmp" "$BUILD_CANDIDATE_DIR/10-subscription.json"; then
+      rm -f "$build_dns_override" "$build_dns_tmp"
+      BUILD_ERROR='Could not apply the DNS override'
+      discard_build_candidate
+      return 1
+    fi
+    rm -f "$build_dns_override"
+    event_log INFO "$build_id" 'DNS section replaced by the container override'
   fi
 
   if ! build_inbound_conflict=$(jq -r \

@@ -696,3 +696,9 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   --callout-icon: #8a5a2c; --callout-code: #7a5326;
   --toast-bg: #40331f; --toast-content: #f4ead6;
 }
+
+/* Поле оверрайда DNS: это textarea, а не просмотрщик, поэтому подсветку не
+   наследует, но моноширинный шрифт и отступы у них общие. */
+textarea.json-viewer { width: calc(100% - 28px); margin: 0 14px 12px; resize: vertical; color: var(--base-content); }
+textarea.json-viewer:focus { border-color: var(--border-hover); outline: none; }
+.settings-note a { color: var(--primary); }

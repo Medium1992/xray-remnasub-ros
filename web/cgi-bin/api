@@ -381,8 +381,11 @@ EOF
     --arg geodata_storage "$GEODATA_STORAGE" --arg geodata_asset_dir "$geodata_asset_dir" --argjson geodata_asset_count "$geodata_asset_count" \
     --argjson geodata_total_bytes "$geodata_total_bytes" --argjson geodata_last_update "$geodata_last_update" --arg geodata_warning "$geodata_warning" \
     --arg backend "$backend" --arg active_interface "$active_interface" --arg active_interface_cidr "$active_interface_cidr" --arg effective_listener_mode "$effective_listener_mode" --arg version "$xray_version" \
+    --argjson dns_override_enabled "$DNS_OVERRIDE_ENABLED" --arg dns_override "$(b64_decode "$DNS_OVERRIDE_B64")" \
+    --argjson routing_rules_enabled "$ROUTING_RULES_ENABLED" --arg routing_rules_position "$ROUTING_RULES_POSITION" \
+    --arg routing_rules "$(b64_decode "$ROUTING_RULES_B64")" \
     --arg ui_theme "$UI_THEME" --arg ui_accent "$UI_ACCENT" \
-    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,inbound_strip_socks:$inbound_strip_socks,dns_override_enabled:$dns_override_enabled,dns_override:$dns_override,inbound_strip_http:$inbound_strip_http,local_socks_enabled:$local_socks_enabled,local_socks_port:$local_socks_port,local_socks_user:$local_socks_user,local_socks_has_pass:$local_socks_has_pass,local_http_enabled:$local_http_enabled,local_http_port:$local_http_port,local_http_user:$local_http_user,local_http_has_pass:$local_http_has_pass,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
+    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,inbound_strip_socks:$inbound_strip_socks,dns_override_enabled:$dns_override_enabled,dns_override:$dns_override,routing_rules_enabled:$routing_rules_enabled,routing_rules_position:$routing_rules_position,routing_rules:$routing_rules,routing_rules_enabled:$routing_rules_enabled,routing_rules_position:$routing_rules_position,routing_rules:$routing_rules,inbound_strip_http:$inbound_strip_http,local_socks_enabled:$local_socks_enabled,local_socks_port:$local_socks_port,local_socks_user:$local_socks_user,local_socks_has_pass:$local_socks_has_pass,local_http_enabled:$local_http_enabled,local_http_port:$local_http_port,local_http_user:$local_http_user,local_http_has_pass:$local_http_has_pass,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
   status_result=$?
   rm -f "$status_profiles" "$status_events"
   rm -f "$status_configs"
@@ -1004,7 +1007,7 @@ EOF
     state_lock || reply_error 'Could not lock container state'
     load_settings
     old_global_headers=$GLOBAL_HEADERS_B64
-    old_runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE:$DNS_OVERRIDE_ENABLED:$DNS_OVERRIDE_B64:$INBOUND_STRIP_SOCKS:$INBOUND_STRIP_HTTP:$LOCAL_SOCKS_ENABLED:$LOCAL_SOCKS_PORT:$LOCAL_SOCKS_USER_B64:$LOCAL_SOCKS_PASS_B64:$LOCAL_HTTP_ENABLED:$LOCAL_HTTP_PORT:$LOCAL_HTTP_USER_B64:$LOCAL_HTTP_PASS_B64:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS
+    old_runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE:$DNS_OVERRIDE_ENABLED:$DNS_OVERRIDE_B64:$ROUTING_RULES_ENABLED:$ROUTING_RULES_POSITION:$ROUTING_RULES_B64:$INBOUND_STRIP_SOCKS:$INBOUND_STRIP_HTTP:$LOCAL_SOCKS_ENABLED:$LOCAL_SOCKS_PORT:$LOCAL_SOCKS_USER_B64:$LOCAL_SOCKS_PASS_B64:$LOCAL_HTTP_ENABLED:$LOCAL_HTTP_PORT:$LOCAL_HTTP_USER_B64:$LOCAL_HTTP_PASS_B64:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS
     LISTENER_MODE=$(form_value listener_mode); REDIR_PORT=$(form_value redir_port); TPROXY_PORT=$(form_value tproxy_port)
     LOG_LEVEL=$(form_value log_level)
     value=$(form_value xray_log_error); [ -z "$value" ] || XRAY_LOG_ERROR=$value
@@ -1027,6 +1030,19 @@ EOF
       DNS_OVERRIDE_B64=$(b64_encode "$dns_override_text")
     fi
     [ "$DNS_OVERRIDE_ENABLED" = 0 ] || [ -n "$DNS_OVERRIDE_B64" ] || reply_error "DNS override is empty"
+    ROUTING_RULES_ENABLED=$(form_value routing_rules_enabled)
+    case "$ROUTING_RULES_ENABLED" in 1) ;; *) ROUTING_RULES_ENABLED=0 ;; esac
+    value=$(form_value routing_rules_position)
+    case "$value" in before|after) ROUTING_RULES_POSITION=$value ;; esac
+    if [ "$(form_value routing_rules_present)" = 1 ]; then
+      routing_rules_text=$(form_value routing_rules)
+      [ "${#routing_rules_text}" -le 65536 ] || reply_error "Routing rules are too large"
+      if [ -n "$routing_rules_text" ] && ! printf '%s' "$routing_rules_text" | jq -e 'type == "array" and all(.[]; type == "object")' >/dev/null 2>&1; then
+        reply_error "Routing rules must be a JSON array of objects"
+      fi
+      ROUTING_RULES_B64=$(b64_encode "$routing_rules_text")
+    fi
+    [ "$ROUTING_RULES_ENABLED" = 0 ] || [ -n "$ROUTING_RULES_B64" ] || reply_error "Routing rules are empty"
     LOCAL_SOCKS_ENABLED=$(form_value local_socks_enabled); LOCAL_HTTP_ENABLED=$(form_value local_http_enabled)
     value=$(form_value local_socks_port); [ -z "$value" ] || LOCAL_SOCKS_PORT=$value
     value=$(form_value local_http_port); [ -z "$value" ] || LOCAL_HTTP_PORT=$value
@@ -1100,7 +1116,7 @@ EOF
     valid_theme "$UI_THEME" || reply_error 'Invalid interface theme'
     [ -z "$UI_ACCENT" ] || valid_accent "$UI_ACCENT" || reply_error 'Accent colour must be #rrggbb'
     XRAY_PROBE_URL_B64=$(b64_encode "$probe_url")
-    runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE:$DNS_OVERRIDE_ENABLED:$DNS_OVERRIDE_B64:$INBOUND_STRIP_SOCKS:$INBOUND_STRIP_HTTP:$LOCAL_SOCKS_ENABLED:$LOCAL_SOCKS_PORT:$LOCAL_SOCKS_USER_B64:$LOCAL_SOCKS_PASS_B64:$LOCAL_HTTP_ENABLED:$LOCAL_HTTP_PORT:$LOCAL_HTTP_USER_B64:$LOCAL_HTTP_PASS_B64:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS
+    runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$GEODATA_STORAGE:$DNS_OVERRIDE_ENABLED:$DNS_OVERRIDE_B64:$ROUTING_RULES_ENABLED:$ROUTING_RULES_POSITION:$ROUTING_RULES_B64:$INBOUND_STRIP_SOCKS:$INBOUND_STRIP_HTTP:$LOCAL_SOCKS_ENABLED:$LOCAL_SOCKS_PORT:$LOCAL_SOCKS_USER_B64:$LOCAL_SOCKS_PASS_B64:$LOCAL_HTTP_ENABLED:$LOCAL_HTTP_PORT:$LOCAL_HTTP_USER_B64:$LOCAL_HTTP_PASS_B64:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS
     write_state || reply_error 'Could not save container settings'
     network_settings_error=
     if ! apply_kernel_settings > "$RUNTIME_DIR/network-settings.log" 2>&1; then

@@ -173,6 +173,10 @@ Xray refreshes geodata itself. Its built-in scheduler honours `geodata.cron`, do
 
 What the container does own is the gap Xray leaves: if an asset file does not exist when the core starts, Xray neither downloads nor creates it — it simply fails to parse the configuration. So the container bootstraps missing assets before `xray run -test`, and only that. An existing file is never re-downloaded and never even touched.
 
+Routing rules of your own are added from the same tab: an array of rule objects is spliced into the subscription's `routing.rules`, at the start or the end of the list. They are added rather than substituted, unlike DNS. Order matters: Xray applies the first rule that matches.
+
+A separate `confdir` file cannot do this — `Config.Override` in Xray replaces the whole `routing` section instead of merging the lists. For the same reason both the rules and the DNS override are spliced into the subscription fragment.
+
 The `dns` section can be replaced: the "Own DNS section" switch on the Xray core tab substitutes a JSON object of your own for whatever the provider sent. It replaces rather than merges — merging would leave the provider's servers in the list with no way to remove them. Off by default.
 
 Geo databases are prepared only when the configuration references `geoip:` or `geosite:` somewhere — routing rules, `dns.servers`, your own DNS override, or an `ext:` reference. With no such reference nothing is downloaded, and a `geodata` section carried by the subscription is dropped as well: nothing would read those files, and the core would wait for them to arrive.

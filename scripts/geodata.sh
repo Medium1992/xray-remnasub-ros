@@ -591,6 +591,9 @@ prepare() {
     progress 'configuration does not reference geoip or geosite; no assets needed'
   fi
   while IFS="$(printf '\t')" read -r asset_file asset_url; do
+    # Пустой список ассетов даёт heredoc из одной пустой строки, и без этой
+    # проверки цикл прокрутится с пустым именем, приняв сам каталог за файл.
+    [ -n "$asset_file" ] || continue
     asset_target=$ASSET_DIR/$asset_file
     path_is_safe "$ASSET_DIR" "$asset_file" || fail "Unsafe geodata asset target: $asset_file"
     if [ -f "$asset_target" ] && [ ! -L "$asset_target" ]; then

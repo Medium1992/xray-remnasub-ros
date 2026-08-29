@@ -535,6 +535,7 @@
     return JSON.stringify([
       model.global_headers_b64, model.listener_mode, model.effective_listener_mode, model.firewall_backend, model.redir_port, model.tproxy_port,
       model.dns_override_enabled, model.dns_override,
+      model.routing_rules_enabled, model.routing_rules_position, model.routing_rules,
       model.inbound_strip_socks, model.inbound_strip_http,
       model.local_socks_enabled, model.local_socks_port, model.local_socks_user, model.local_socks_has_pass,
       model.local_http_enabled, model.local_http_port, model.local_http_user, model.local_http_has_pass,
@@ -584,6 +585,10 @@
     all("[data-dns-override]").forEach((field) => field.classList.toggle("hidden", !$("dns-override-enabled").checked));
   }
 
+  function updateRoutingRulesFields() {
+    all("[data-routing-rules]").forEach((field) => field.classList.toggle("hidden", !$("routing-rules-enabled").checked));
+  }
+
   function updateLocalInboundFields() {
     all("[data-local-socks]").forEach((field) => field.classList.toggle("hidden", !$("local-socks-enabled").checked));
     all("[data-local-http]").forEach((field) => field.classList.toggle("hidden", !$("local-http-enabled").checked));
@@ -623,7 +628,11 @@
     $("xray-log-level").value = model.log_level || "warning";
     $("dns-override-enabled").checked = enabled(model.dns_override_enabled);
     $("dns-override").value = model.dns_override || "";
+    $("routing-rules-enabled").checked = enabled(model.routing_rules_enabled);
+    $("routing-rules").value = model.routing_rules || "";
+    all('input[name="routing-rules-position"]').forEach((input) => { input.checked = input.value === (model.routing_rules_position || "before"); });
     updateDnsOverrideFields();
+    updateRoutingRulesFields();
     $("inbound-strip-socks").checked = enabled(model.inbound_strip_socks ?? 1);
     $("inbound-strip-http").checked = enabled(model.inbound_strip_http ?? 1);
     $("local-socks-enabled").checked = enabled(model.local_socks_enabled);
@@ -1079,6 +1088,10 @@
         dns_override_enabled: $("dns-override-enabled").checked ? "1" : "0",
         dns_override_present: "1",
         dns_override: $("dns-override").value,
+        routing_rules_enabled: $("routing-rules-enabled").checked ? "1" : "0",
+        routing_rules_present: "1",
+        routing_rules: $("routing-rules").value,
+        routing_rules_position: document.querySelector('input[name="routing-rules-position"]:checked')?.value || "before",
         inbound_strip_socks: $("inbound-strip-socks").checked ? "1" : "0",
         inbound_strip_http: $("inbound-strip-http").checked ? "1" : "0",
         local_socks_enabled: $("local-socks-enabled").checked ? "1" : "0",
@@ -1257,6 +1270,7 @@
   all('input[name="geodata-storage"]').forEach((input) => input.addEventListener("change", updateGeodataFields));
   $("xray-sniffing-enabled").addEventListener("change", updateSniffingFields);
   $("dns-override-enabled").addEventListener("change", updateDnsOverrideFields);
+  $("routing-rules-enabled").addEventListener("change", updateRoutingRulesFields);
   $("local-socks-enabled").addEventListener("change", updateLocalInboundFields);
   $("local-http-enabled").addEventListener("change", updateLocalInboundFields);
   // Перерисовка из редактора, а не из модели, чтобы не потерять несохранённое.

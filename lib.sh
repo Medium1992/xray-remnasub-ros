@@ -513,6 +513,9 @@ load_settings() {
     read -r GEODATA_STORAGE
     read -r DNS_OVERRIDE_ENABLED
     read -r DNS_OVERRIDE_B64
+    read -r ROUTING_RULES_ENABLED
+    read -r ROUTING_RULES_POSITION
+    read -r ROUTING_RULES_B64
     read -r INBOUND_STRIP_SOCKS
     read -r INBOUND_STRIP_HTTP
     read -r LOCAL_SOCKS_ENABLED
@@ -535,7 +538,9 @@ $(state_load "$STATE" \
   NETWORK_CT_UNACKNOWLEDGED NETWORK_CT_UDP_STREAM \
   XRAY_SNIFFING_ENABLED XRAY_SNIFFING_ROUTE_ONLY \
   XRAY_PROBE_URL_B64 XRAY_PROBE_TIMEOUT_SECONDS XRAY_PROBE_HTTP_METHOD \
-  GEODATA_STORAGE DNS_OVERRIDE_ENABLED DNS_OVERRIDE_B64 INBOUND_STRIP_SOCKS INBOUND_STRIP_HTTP \
+  GEODATA_STORAGE DNS_OVERRIDE_ENABLED DNS_OVERRIDE_B64 \
+  ROUTING_RULES_ENABLED ROUTING_RULES_POSITION ROUTING_RULES_B64 \
+  INBOUND_STRIP_SOCKS INBOUND_STRIP_HTTP \
   LOCAL_SOCKS_ENABLED LOCAL_SOCKS_PORT LOCAL_SOCKS_USER_B64 LOCAL_SOCKS_PASS_B64 \
   LOCAL_HTTP_ENABLED LOCAL_HTTP_PORT LOCAL_HTTP_USER_B64 LOCAL_HTTP_PASS_B64 \
   UI_THEME UI_ACCENT)
@@ -573,6 +578,8 @@ EOF
   case "$XRAY_PROBE_HTTP_METHOD" in GET|HEAD) ;; *) XRAY_PROBE_HTTP_METHOD=HEAD ;; esac
   case "$GEODATA_STORAGE" in memory|persistent) ;; *) GEODATA_STORAGE=memory ;; esac
   case "$DNS_OVERRIDE_ENABLED" in 1) ;; *) DNS_OVERRIDE_ENABLED=0 ;; esac
+  case "$ROUTING_RULES_ENABLED" in 1) ;; *) ROUTING_RULES_ENABLED=0 ;; esac
+  case "$ROUTING_RULES_POSITION" in before|after) ;; *) ROUTING_RULES_POSITION=before ;; esac
   # Локальные входы из подписки по умолчанию вырезаются: перехват здесь свой,
   # а чужой socks на неизвестном порту — это открытый прокси на роутере.
   case "$INBOUND_STRIP_SOCKS" in 0) ;; *) INBOUND_STRIP_SOCKS=1 ;; esac
@@ -626,6 +633,9 @@ XRAY_PROBE_HTTP_METHOD=$XRAY_PROBE_HTTP_METHOD
 GEODATA_STORAGE=$GEODATA_STORAGE
 DNS_OVERRIDE_ENABLED=$DNS_OVERRIDE_ENABLED
 DNS_OVERRIDE_B64=$DNS_OVERRIDE_B64
+ROUTING_RULES_ENABLED=$ROUTING_RULES_ENABLED
+ROUTING_RULES_POSITION=$ROUTING_RULES_POSITION
+ROUTING_RULES_B64=$ROUTING_RULES_B64
 INBOUND_STRIP_SOCKS=$INBOUND_STRIP_SOCKS
 INBOUND_STRIP_HTTP=$INBOUND_STRIP_HTTP
 LOCAL_SOCKS_ENABLED=$LOCAL_SOCKS_ENABLED
@@ -885,6 +895,34 @@ build_xray_config() {
     fi
     rm -f "$build_dns_override"
     event_log INFO "$build_id" 'DNS section replaced by the container override'
+  fi
+
+  # Свои правила маршрутизации вставляются в массив подписки. Отдельным файлом
+  # confdir их не добавить: Config.Override заменяет секцию routing целиком.
+  if [ "$ROUTING_RULES_ENABLED" = 1 ]; then
+    build_rules=$RUNTIME_DIR/$build_id.rules.$$.json
+    b64_decode "$ROUTING_RULES_B64" > "$build_rules"
+    if ! jq -e 'type == "array" and all(.[]; type == "object")' "$build_rules" >/dev/null 2>&1; then
+      rm -f "$build_rules"
+      BUILD_ERROR='Routing rules must be a JSON array of objects'
+      discard_build_candidate
+      return 1
+    fi
+    build_rules_tmp=$RUNTIME_DIR/$build_id.rules-merged.$$.json
+    if ! jq --slurpfile rules "$build_rules" --arg position "$ROUTING_RULES_POSITION" '
+         .routing = ((.routing // {}) |
+           .rules = (if $position == "after"
+                     then ((.rules // []) + $rules[0])
+                     else ($rules[0] + (.rules // [])) end))
+       ' "$BUILD_CANDIDATE_DIR/10-subscription.json" > "$build_rules_tmp" ||
+       ! mv "$build_rules_tmp" "$BUILD_CANDIDATE_DIR/10-subscription.json"; then
+      rm -f "$build_rules" "$build_rules_tmp"
+      BUILD_ERROR='Could not add the routing rules'
+      discard_build_candidate
+      return 1
+    fi
+    rm -f "$build_rules"
+    event_log INFO "$build_id" "container routing rules added at the $ROUTING_RULES_POSITION of the list"
   fi
 
   if ! build_inbound_conflict=$(jq -r \

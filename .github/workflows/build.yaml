@@ -33,10 +33,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Последним считается самый свежий опубликованный релиз апстрима,
-          # включая pre-release: у Xray-core они выходят в общем потоке, и
-          # отбрасывать их значило бы отставать от того, что уже раздаётся
-          # клиентам. Не берутся только черновики — у них ещё нет ассетов.
+          # Самый свежий релиз, включая pre-release. Черновики пропускаем:
+          # у них ещё нет ассетов.
           xray=$(curl -fsSL --retry 5 --retry-all-errors \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
@@ -208,9 +206,7 @@ jobs:
           git commit -m "Auto-update: Xray ${xray}"
           git push
 
-      # Те же архивы, что ушли в артефакты, публикуются в Telegram: на роутер
-      # их обычно тянут вручную, а из чата это делать удобнее, чем из Actions.
-      # Секреты необязательные — без них шаг просто пропускается.
+      # Те же архивы, что и в артефактах. Без секретов шаг пропускается.
       - name: Publish RouterOS archives to Telegram
         if: steps.check.outputs.build_needed == 'true'
         env:
@@ -279,12 +275,8 @@ jobs:
         if: steps.check.outputs.build_needed == 'true' && env.DELETE_UNTAGGED == 'true'
         run: echo "${GITHUB_TOKEN}" | crane auth login ghcr.io -u "${PACKAGE_OWNER}" --password-stdin
 
-      # Каждая мультиарх-сборка оставляет в GHCR безымянные версии. Удалять их
-      # по одному только признаку "нет тегов" нельзя: платформенные образы под
-      # индексом тоже без тегов, и снос такого digest ломает уже
-      # опубликованный manifest. Поэтому сначала обходим все теги через crane и
-      # помечаем их дочерние digest как защищённые, а удаляем лишь то, что не
-      # попало ни в один манифест.
+      # Платформенные образы под индексом тоже без тегов, поэтому сначала
+      # обходим теги через crane и защищаем их дочерние digest.
       - name: Analyze GHCR package versions
         if: steps.check.outputs.build_needed == 'true' && env.DELETE_UNTAGGED == 'true'
         id: analyze

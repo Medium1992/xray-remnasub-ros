@@ -1,10 +1,8 @@
 (() => {
   "use strict";
 
-  // Frame-buster. Заголовок X-Frame-Options busybox httpd к статике не
-  // добавляет, а frame-ancestors внутри <meta> CSP браузер по спецификации
-  // игнорирует. Без этого панель со всеми её кнопками можно подложить в
-  // невидимый iframe на чужой странице и кликать за пользователя.
+  // Frame-buster: busybox httpd не шлёт X-Frame-Options, а frame-ancestors в
+  // <meta> CSP браузер игнорирует.
   if (window.self !== window.top) {
     document.documentElement.replaceChildren();
     try { window.top.location = window.self.location; } catch { /* другой origin */ }
@@ -289,10 +287,8 @@
     }).filter(Boolean);
   }
 
-  // Флаг в начале имени конфигурации: либо пара regional indicator (🇱🇻), либо
-  // чёрный флаг с тегами (🏴󠁧󠁢󠁳󠁣󠁴󠁿). Он занимает место номера строки, а имя
-  // показывается уже без него — иначе флаг и цифра стоят рядом и дублируют
-  // друг друга.
+  // Флаг в начале имени: пара regional indicator либо чёрный флаг с тегами.
+  // Занимает место номера строки, из имени убирается.
   const FLAG_PREFIX = /^(?:[\u{1F1E6}-\u{1F1FF}]{2}|\u{1F3F4}[\u{E0060}-\u{E007F}]+)/u;
 
   function splitFlag(name) {
@@ -336,9 +332,7 @@
     all("[data-page]").forEach((page) => page.classList.toggle("active", page.dataset.page === pageName));
   }
 
-  // ── Тема ────────────────────────────────────────────────────
-  // Выбранное применяется сразу, чтобы решение принималось глядя на результат,
-  // а сохраняется вместе с остальными настройками по кнопке «Сохранить».
+  // Тема применяется сразу, а сохраняется по кнопке «Сохранить».
   const theme = window.RemnaTheme;
 
   function currentTheme() {
@@ -363,9 +357,7 @@
       const checked = entry.id === selectedTheme;
       return `<button class="theme-card" type="button" role="radio" aria-checked="${checked ? "true" : "false"}" data-theme-id="${escapeHtml(entry.id)}" data-theme="${escapeHtml(resolved)}"><span class="theme-preview"><i></i><span><em></em><em></em></span></span><strong>${escapeHtml(entry.label)}</strong></button>`;
     }).join("");
-    // Цвет проставляется через CSSOM, а не атрибутом style: страница отдаётся с
-    // CSP `style-src 'self'`, поэтому инлайн-стиль браузер отбрасывает и
-    // образцы остаются бесцветными.
+    // Цвет через CSSOM: инлайн-стиль отбрасывает CSP `style-src 'self'`.
     $("accent-presets").innerHTML = theme.ACCENT_PRESETS.map((colour) =>
       `<button type="button" data-accent="${escapeHtml(colour)}" aria-pressed="${colour.toLowerCase() === selectedAccent.toLowerCase() ? "true" : "false"}" title="${escapeHtml(colour)}" aria-label="Акцент ${escapeHtml(colour)}"></button>`).join("");
     all("[data-accent]", $("accent-presets")).forEach((button) => { button.style.background = button.dataset.accent; });
@@ -435,9 +427,7 @@
     });
     if (fingerprint === cardsFingerprint) return;
     cardsFingerprint = fingerprint;
-    // Список пересобирается целиком, а во время обновления подписки опрос идёт
-    // раз в 800 мс — без этого фокус слетал с кнопки под курсором, и клик
-    // попадал уже по новому узлу. Запоминаем, что было в фокусе, и возвращаем.
+    // Список пересобирается целиком, поэтому фокус запоминаем и возвращаем.
     const focused = document.activeElement;
     const focusedKey = focused && $("subscription-list")?.contains(focused)
       ? [focused.dataset.configIndex, focused.dataset.probeIndex, focused.dataset.profileAction, focused.className].join("|")
@@ -767,10 +757,8 @@
     }
   }
 
-  // Подсветка JSON. Токенизируем исходный текст, а экранируем уже каждый
-  // кусок отдельно: если сначала экранировать всё, кавычки станут &quot; и
-  // строки перестанут находиться. Цвета задаются классами — инлайн-стиль
-  // страница не пропустит, у неё CSP style-src 'self'.
+  // Токенизируем до экранирования: иначе кавычки станут &quot; и строки не
+  // найдутся. Цвета классами — инлайн-стиль запрещён CSP.
   const JSON_TOKEN = /"(?:\\.|[^"\\])*"|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
   const JSON_HIGHLIGHT_LIMIT = 400000;
 
@@ -852,10 +840,8 @@
     renderRuntime();
     renderSubscriptions();
     renderSettings(forceSettings);
-    // Сводка geodata только читается и ни к какому полю формы не привязана,
-    // поэтому обновляется всегда. Внутри renderSettings она попадала под флаг
-    // settingsDirty: стоило тронуть любую настройку — и размер с временем
-    // файлов замирали до сохранения или перезагрузки страницы.
+    // Сводка geodata только читается, поэтому обновляется всегда, а не под
+    // флагом settingsDirty.
     updateGeodataFields();
     renderActionStates();
     if (ui.editorProfileId) {
@@ -907,10 +893,8 @@
       ? config.fingerprint === profile.selected_config_fingerprint
       : Number(config.index) === Number(profile.selected_config_index);
     if (alreadySelected) return;
-    // Выбор запоминается до запроса и держится, пока контейнер не подтвердит
-    // его в статусе. Раньше подсветка бралась только из модели, а её заменяет
-    // каждый опрос — пока шла пересборка, сервер ещё отдавал прежнюю строку, и
-    // выделение прыгало туда-сюда.
+    // Выбор держится до подтверждения контейнером: модель заменяется каждым
+    // опросом, и до конца пересборки сервер отдаёт прежнюю строку.
     ui.pendingConfig = { profileId: profile.id, index: Number(config.index), fingerprint: config.fingerprint, at: Date.now() };
     cardsFingerprint = "";
     renderSubscriptions();
@@ -938,9 +922,7 @@
     return pending;
   }
 
-  // Ожидание снимается, когда контейнер отдал ту же строку выбранной, либо по
-  // сроку: иначе неудача на стороне контейнера оставила бы список навсегда
-  // заблокированным.
+  // Снимается по подтверждению или по сроку, иначе список останется заблокирован.
   function settlePendingSelection() {
     const pending = ui.pendingConfig;
     if (!pending) return;
@@ -1277,10 +1259,7 @@
   $("dns-override-enabled").addEventListener("change", updateDnsOverrideFields);
   $("local-socks-enabled").addEventListener("change", updateLocalInboundFields);
   $("local-http-enabled").addEventListener("change", updateLocalInboundFields);
-  // Переключатель перерисовывает список из того, что сейчас в редакторе, а не
-  // из модели: иначе несохранённые правки пропали бы. Выключение убирает
-  // обязательные строки, поэтому после сохранения они исчезают и из состояния,
-  // и подставлять их будет уже нечему.
+  // Перерисовка из редактора, а не из модели, чтобы не потерять несохранённое.
   $("add-global-header").addEventListener("click", () => {
     appendHeader("global-header-rows");
     ui.settingsDirty = true;
@@ -1337,11 +1316,8 @@
     event.returnValue = "";
   });
 
-  // Каждый опрос статуса — это CGI-процесс на роутере, поэтому опрашивать
-  // невидимую вкладку смысла нет: она всё равно ничего не показывает, а
-  // забытая в фоне панель круглосуточно нагружала бы контейнер. При
-  // недоступном API интервал растёт, иначе тост об ошибке появлялся бы каждые
-  // три секунды до конца времён.
+  // Каждый опрос — CGI-процесс на роутере, поэтому невидимая вкладка не
+  // опрашивается, а при недоступном API интервал растёт.
   function pollDelay() {
     if (pollFailures > 0) return Math.min(30000, 3000 * 2 ** (pollFailures - 1));
     return model.profiles.some((profile) => profile.refresh_state === "queued" || profile.refresh_state === "working") ? 800 : 3000;
@@ -1363,9 +1339,8 @@
     else poll();
   });
 
-  // Подписи «5 мин. назад» считаются на отрисовке, а отрисовка списка
-  // пропускается, пока данные не изменились. Без этого тика относительное
-  // время застывало бы на «только что» до следующего обновления подписки.
+  // Отрисовка пропускается, пока данные не менялись, поэтому относительное
+  // время обновляет отдельный тик.
   setInterval(() => {
     if (document.hidden || ui.page !== "subscriptions") return;
     cardsFingerprint = "";

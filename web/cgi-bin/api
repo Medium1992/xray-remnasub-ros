@@ -4,11 +4,8 @@ set -u
 
 json_headers() { printf 'Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'; }
 reply_error() { state_unlock; json_headers; jq -n --arg error "$1" '{ok:false,error:$error}'; exit 0; }
-# Честный разбор percent-encoding. Прежний вариант превращал '%' в '\x' и
-# скармливал строку printf '%b': браузер всё кодирует, но сырой обратный слэш
-# из запроса, отправленного не браузером, интерпретировался как escape и молча
-# портил значение. Здесь неполная или не-hex последовательность остаётся
-# литеральным текстом, а '\' не значит ничего.
+# Разбор percent-encoding. Неполная или не-hex последовательность остаётся
+# литеральным текстом, обратный слэш ничего не значит.
 url_decode() {
   printf '%s' "${1:-}" | awk '
     BEGIN {
@@ -295,9 +292,7 @@ status_response() {
     rm -f "$status_profiles" "$status_configs" "$status_events"
     reply_error 'Could not read profiles'
   fi
-  # Копия, а не путь на живой каталог версии. Установка новой конфигурации
-  # заменяет каталог целиком, и между проверкой на существование и запуском jq
-  # файл успевал исчезнуть — статус падал с «Bad JSON ... No such file».
+  # Копия, а не путь на живой каталог версии: установка заменяет его целиком.
   active_configs=$(profile_configs "$ACTIVE_PROFILE_ID" 2>/dev/null || true)
   if [ -z "$active_configs" ] || ! cp "$active_configs" "$status_configs" 2>/dev/null ||
      [ ! -s "$status_configs" ] || ! jq -e 'type == "array"' "$status_configs" >/dev/null 2>&1; then
@@ -312,9 +307,7 @@ status_response() {
   fi
   tail -n 100 "$EVENT_LOG" > "$status_events" 2>/dev/null || : > "$status_events"
   running=false; xray_pid=$(cat "$RUNTIME_DIR/xray.pid" 2>/dev/null || true); valid_number "$xray_pid" && kill -0 "$xray_pid" 2>/dev/null && running=true
-  # Версия ядра и доступность nftables определяются один раз при старте
-  # контейнера: ни то, ни другое в рантайме не меняется, а раньше каждый опрос
-  # статуса запускал ради них xray и nft.
+  # Версия ядра и backend определяются один раз при старте контейнера.
   backend=$(cat "$RUNTIME_DIR/firewall.backend" 2>/dev/null || true)
   case "$backend" in nftables|iptables) ;; *) backend=iptables ;; esac
   xray_version=$(cat "$RUNTIME_DIR/xray.version" 2>/dev/null || true)
@@ -326,10 +319,8 @@ status_response() {
     active_runtime_listener_mode=$(jq -r '.mode // empty' "$active_runtime_dir/.metadata/listener.json" 2>/dev/null || true)
     case "$active_runtime_listener_mode" in tproxy|redir-tproxy|redir-tun) effective_listener_mode=$active_runtime_listener_mode ;; esac
   fi
-  # Пока Xray не запускался, режима в метаданных ещё нет, и раньше сюда
-  # уходило слово auto — панель принимала его за фактический режим и рисовала
-  # TUN независимо от того, что умеет ядро. Подставляем разобранный при старте
-  # результат.
+  # Пока Xray не запускался, режима в метаданных нет — берём разобранный при
+  # старте, иначе в панель уйдёт слово auto.
   if [ "$effective_listener_mode" = auto ]; then
     effective_listener_mode=$(cat "$RUNTIME_DIR/listener.auto" 2>/dev/null || true)
     case "$effective_listener_mode" in tproxy|redir-tproxy|redir-tun) ;; *) effective_listener_mode=redir-tun ;; esac
@@ -347,14 +338,8 @@ status_response() {
     geodata_asset_dir=$(jq -r '.asset_dir // empty' "$geodata_metadata" 2>/dev/null || true)
     geodata_asset_count=$(jq -r '(.assets // []) | length' "$geodata_metadata" 2>/dev/null || printf 0)
     geodata_warning=$(jq -r '[.warnings[]? | ((.file // "geodata") + ": " + (.message // "update failed"))] | join("\n")' "$geodata_metadata" 2>/dev/null || true)
-    # Размер и время берутся с самих файлов, а не из метаданных подготовки:
-    # geodata обновляет Xray по своему расписанию, и записанные при сборке
-    # значения устаревают в тот же момент, когда ядро скачало новую версию.
-    #
-    # Размер и время снимаются через wc и file_mtime, а не через stat: в
-    # armv5-образе (Buildroot rootfs вместо Alpine) applet stat не собран, и
-    # прямой вызов там просто ничего не вернул бы. file_mtime уже умеет
-    # откатываться на date -r.
+    # С самих файлов, а не из метаданных сборки: их обновляет Xray. wc и
+    # file_mtime вместо stat — в armv5-образе этого applet нет.
     if [ -n "$geodata_asset_dir" ]; then
       while IFS= read -r geodata_asset; do
         [ -n "$geodata_asset" ] || continue
@@ -748,10 +733,8 @@ EOF
          jq -e 'type == "object"' "$probe_metrics_tmp" >/dev/null 2>&1; then
         mv "$probe_metrics_tmp" "$probe_metrics"
         probe_metrics_ready=1
-        # Достаточно одного живого outbound: конфигурация уже доказала, что
-        # работает, а ждать отчёта от всех остальных — это ровно то время,
-        # которое проверка и съедала. Если живых пока нет, ждём дальше, пока
-        # не отчитаются все или не выйдет таймаут.
+        # Одного живого outbound достаточно. Если живых нет — ждём остальных
+        # или таймаута.
         probe_seen=$(jq -r --arg prefix "$probe_target_prefix" '((.observatory // {}) | to_entries | map(select(.key | startswith($prefix))) | length)' "$probe_metrics" 2>/dev/null)
         valid_number "$probe_seen" || probe_seen=0
         if jq -e --arg prefix "$probe_target_prefix" \
@@ -775,11 +758,8 @@ EOF
     probe_delay=$(printf '%s' "$probe_result" | jq -c '.delay_ms')
     valid_number "$probe_alive" || probe_alive=0
     [ "$probe_alive" -gt 0 ] && probe_reachable=true || probe_reachable=false
-    # Результат кладётся в /dev/shm, а не только в память вкладки: обновление
-    # страницы не должно стирать проверки. Ключ — отпечаток конфигурации,
-    # поэтому после смены подписки старые результаты сами перестают
-    # подходить. Хранилище оперативное: переживать перезапуск контейнера
-    # проверкам незачем.
+    # Результат переживает обновление страницы, но не перезапуск контейнера.
+    # Ключ — отпечаток конфигурации, поэтому после смены подписки не подойдёт.
     probe_store=$STATUS_DIR/$id.probes.json
     probe_store_tmp=$probe_store.tmp.$$
     probe_store_previous=$PROBE_TEMP_DIR/probes-previous.json
@@ -809,17 +789,9 @@ EOF
       '{ok:true,index:$index,reachable:$reachable,delay_ms:$delay,alive:$alive,total:$total,method:$method,source:$source}'
     ;;
   probe-all)
-    # Проверка всех конфигураций одним экземпляром ядра. Раньше панель гоняла
-    # probe-config по очереди, поднимая отдельный Xray на каждую строку: на
-    # восьми конфигурациях это восемь запусков подряд. burstObservatory умеет
-    # опрашивать произвольное число outbound параллельно, поэтому все они
-    # сводятся в один конфиг.
-    #
-    # dns, routing и geodata сюда не переносятся сознательно: burstObservatory
-    # дозванивается через outbound напрямую, мимо маршрутизации, поэтому
-    # правила с geosite/geoip только потребовали бы файлы geodata и аренду на
-    # них, ничего не давая проверке. Имена серверов резолвит системный
-    # резолвер контейнера.
+    # Все конфигурации одним ядром: burstObservatory опрашивает outbound
+    # параллельно. dns, routing и geodata не переносятся — проверка идёт через
+    # outbound напрямую, мимо маршрутизации.
     id=$(form_value profile_id); profile=$(profile_path "$id") || reply_error 'Invalid profile'; [ -f "$profile" ] || reply_error 'Profile not found'
     command -v nc >/dev/null 2>&1 || reply_error 'Health check is unavailable'
     command -v wget >/dev/null 2>&1 || reply_error 'Health check is unavailable'
@@ -869,10 +841,8 @@ EOF
         type == "object" and
         ((.protocol? // "" | tostring | ascii_downcase) as $protocol |
           (["freedom","blackhole","dns","loopback"] | index($protocol)) == null);
-      # Теги переписываются на c<конфигурация>-<позиция>: одинаковые теги в
-      # разных элементах подписки — обычное дело, а в общем ядре они обязаны
-      # быть уникальны. Ссылки цепочек переносятся по той же карте, иначе
-      # dialerProxy и proxySettings укажут в пустоту.
+      # Теги переписываются на c<конфигурация>-<позиция>, иначе одинаковые теги
+      # из разных элементов столкнутся. Ссылки цепочек переносятся по той же карте.
       def retag($i; $outs):
         ([$outs | to_entries[] | {key: ((.value.tag // "") | tostring), value: ("c\($i)-\(.key)")}]
          | map(select(.key != "")) | from_entries) as $map |
@@ -1121,9 +1091,7 @@ EOF
     valid_number "$XRAY_PROBE_TIMEOUT_SECONDS" && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -ge 1 ] && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -le 30 ] || reply_error 'Health check timeout must be 1..30 seconds'
     case "$XRAY_PROBE_HTTP_METHOD" in GET|HEAD) ;; *) reply_error 'Health check method must be GET or HEAD' ;; esac
     case "$GEODATA_STORAGE" in memory|persistent) ;; *) reply_error 'Invalid geodata storage mode' ;; esac
-    # Вид панели приезжает в той же форме, но к рантайму отношения не имеет:
-    # менять его перестройкой конфигурации и перезапуском Xray нельзя, поэтому
-    # эти два поля намеренно не входят в runtime_signature ниже.
+    # Вид панели к рантайму отношения не имеет и в runtime_signature не входит.
     ui_theme=$(form_value ui_theme); [ -z "$ui_theme" ] || UI_THEME=$ui_theme
     ui_accent=$(form_value ui_accent)
     if [ "$(form_value ui_accent_present)" = 1 ]; then

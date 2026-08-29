@@ -5,20 +5,12 @@
   unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0020-E007F;
 }
 
-/* ── Токены ──────────────────────────────────────────────────
-   Ниже цвета встречаются только через var(): правила ничего не знают о
-   палитре, поэтому тема меняется одним блоком переопределений в конце файла.
-   :root держит тёмную палитру по умолчанию — она же и штатная.
+/* Токены. Цвета встречаются только через var(), тема меняется блоками в конце
+   файла. --overlay-rgb задаёт направление полупрозрачных наложений,
+   --primary-rgb нужен для rgba() с разной прозрачностью.
 
-   --overlay-rgb задаёт направление полупрозрачных наложений: на тёмном фоне
-   подсветка светлее фона, на светлом обязана быть темнее, иначе hover
-   пропадает. --primary-rgb нужен отдельно от --primary, потому что акцент
-   участвует в rgba() c разной прозрачностью, а из #rrggbb её не получить. */
-/* Тёмные темы перечислены здесь вместе с :root не для красоты: карточки выбора
-   темы несут data-theme на себе, и внутри светлой страницы блок вида
-   [data-theme="graphite"] переопределял бы только фон, а --strong и --muted
-   наследовал бы от светлой страницы — получался тёмный текст на тёмной
-   карточке. Полная тёмная база должна включаться самим атрибутом. */
+   Тёмные темы перечислены вместе с :root, потому что карточки выбора темы
+   несут data-theme на себе: без этого они наследовали бы --strong страницы. */
 :root,
 [data-theme="dark"],
 [data-theme="graphite"],
@@ -196,9 +188,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .main-nav button:focus-visible, .settings-tabs button:focus-visible, .mobile-nav button:focus-visible { outline: 0; box-shadow: inset 0 0 0 1px rgba(var(--primary-rgb), .58); }
 
 .subscription-list { display: grid; gap: 10px; }
-/* Граница в покое, а не только на hover: на тёмной теме карточку отделяла сама
-   разница яркости, а на светлой белая карточка на почти белом фоне без рамки
-   не читалась вовсе. */
+/* Граница в покое, а не только на hover: на светлой теме иначе не читается. */
 .subscription-card { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--base-100); box-shadow: var(--shadow); transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
 .subscription-card:hover { border-color: var(--border-hover); background: var(--card-hover); }
 .subscription-card.active { border-color: rgba(var(--primary-rgb), .48); box-shadow: inset 3px 0 0 var(--primary), var(--shadow); }
@@ -269,7 +259,7 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .config-row-select { min-width: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr) 64px; align-items: center; gap: 11px; padding: 8px 12px 8px 0; border: 0; color: inherit; background: transparent; text-align: left; }
 .config-row-select:disabled { cursor: default; opacity: 1; }
 .config-row-index { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--muted); background: var(--base-300); font: 700 10px/1 ui-monospace, Consolas, monospace; }
-/* Флаг занимает ту же клетку, что и номер, но без плашки: цветной эмодзи на
+/* Флаг в клетке номера без плашки: цветной эмодзи на
    заливке акцента выглядит грязно, а размер держим прежним, чтобы строки не
    разъезжались между конфигурациями с флагом и без. */
 /* Семейство задаётся целиком: базовое правило ставит шрифт сокращением `font`,

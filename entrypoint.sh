@@ -64,9 +64,7 @@ initialize_storage() {
     UI_THEME=auto UI_ACCENT=
     write_state
   fi
-  # Хвосты от install_build_candidates_locked: если контейнер убили ровно
-  # между cp и mv, они остаются в персистентном каталоге навсегда. Глоб
-  # p-*.conf их не подхватывает, так что вреда нет, но и убирать их некому.
+  # Хвосты install_build_candidates_locked, если контейнер убили между cp и mv.
   rm -f "$PROFILES_DIR"/p-*.conf.next.* "$PROFILES_DIR"/p-*.conf.previous.* 2>/dev/null || true
   load_settings
   if ! valid_profile_id "$ACTIVE_PROFILE_ID" || [ ! -f "$(profile_path "$ACTIVE_PROFILE_ID" 2>/dev/null)" ]; then
@@ -80,9 +78,7 @@ initialize_storage() {
   done
 }
 
-# User-Agent здесь не косметика: Remnawave по нему решает, в каком формате
-# отдать подписку, и клиентская строка — способ получить именно JSON-массив
-# конфигураций. Сам контейнер к этому клиенту отношения не имеет.
+# Remnawave выбирает формат подписки по User-Agent, поэтому строка клиентская.
 effective_headers() {
   header_profile=$1
   load_settings
@@ -105,9 +101,7 @@ effective_headers() {
     {
       line=$0
       sub(/\r$/, "", line)
-      # Строка, начинающаяся с решётки, выключена пользователем: она хранится
-      # вместе с остальными, чтобы значение можно было вернуть галочкой, но в
-      # запрос не попадает.
+      # Ведущая решётка — заголовок выключен: хранится, но не отправляется.
       off=0
       if (sub(/^[[:space:]]*#/, "", line)) off=1
       separator=index(line, ":")
@@ -446,9 +440,7 @@ process_jobs() {
             fi
             set_final_status "$id" ready "$job_message" ready "$action" "$job_started" "$(date +%s)" "$job_http" "$job_http_line" "$job_bytes" "$job_validation"
             rm -f "$ERRORS_DIR/$id.txt"
-            # Перезапускать Xray имеет смысл только когда конфигурация или
-            # geodata действительно поменялись: HUP рвёт все клиентские
-            # соединения, а обновление подписки идёт раз в час.
+            # HUP рвёт клиентские соединения, поэтому только при изменениях.
             if [ "$install_unchanged" = 1 ]; then
               event_log INFO "$id" 'configuration unchanged; Xray was left running'
             else
@@ -646,12 +638,9 @@ cleanup_routing() {
   ROUTING_ACTIVE=0
 }
 
-# Пока Xray не обслуживает трафик, контейнер перестаёт отвечать на ICMP
-# echo-request с интерфейса RouterOS: на этом держится обнаружение недоступного
-# шлюза со стороны netwatch и recursive routing, то есть переключение на
-# резервный канал. Молчать о неудаче здесь нельзя — не поставленное правило
-# означает, что RouterOS продолжает считать шлюз живым, а трафик в это время
-# уходит в никуда. Раньше обе функции глушили любой отказ в /dev/null.
+# Пока Xray не обслуживает трафик, ICMP echo-request с интерфейса RouterOS
+# отбрасывается: на этом держатся netwatch и check-gateway=ping. Отказ
+# установки правила логируется — иначе RouterOS считает шлюз живым.
 block_probe() {
   [ "$PROBE_BLOCKED" = 0 ] || return 0
   if ! /scripts/network.sh probe-block > "$RUNTIME_DIR/probe.log" 2>&1; then
@@ -676,10 +665,7 @@ allow_probe() {
   event_log INFO system 'ICMP gateway probe restored: Xray is running'
 }
 
-# Супервизор молча крутился на любой из блокирующих веток: правил нет, ICMP
-# заблокирован, в журнале ни строки, и понять, чего он ждёт, было нельзя.
-# Причина пишется один раз при смене — цикл идёт по пять раз в секунду, и
-# писать её каждый заход означало бы забить журнал.
+# Причина ожидания пишется один раз при смене: цикл идёт пять раз в секунду.
 SUPERVISOR_HOLD_REASON=
 supervisor_hold() {
   [ "$SUPERVISOR_HOLD_REASON" != "$1" ] || return 0
@@ -950,17 +936,11 @@ trap stop TERM INT
 LISTENER_MODE=${LISTENER_MODE:-auto} REDIR_PORT=${REDIR_PORT:-12345} TPROXY_PORT=${TPROXY_PORT:-12346} /scripts/network.sh shutdown >/dev/null 2>&1 || true
 block_probe || true
 
-# Опрос статуса из вебки идёт раз в 3 секунды, и на каждый из них раньше
-# запускался xray version и nft. Ни версия ядра в образе, ни доступность
-# nftables в ядре роутера в рантайме не меняются, так что вычисляем их один раз.
+# Версия ядра и доступность nftables в рантайме не меняются — считаем один раз,
+# а не на каждый опрос статуса.
 xray version 2>/dev/null | head -n1 > "$RUNTIME_DIR/xray.version" || : > "$RUNTIME_DIR/xray.version"
-# Выбор backend по модулю ядра, как в mihomo-proxy-ros. nftables в ядре
-# RouterOS появились с 7.21 и только на arm64 и amd64, поэтому в образе для
-# этих архитектур лежит только nftables: iptables там нужен лишь тому, кто
-# поставил контейнер на прошивку постарше, и докачивается по факту, а не
-# занимает место у всех. На armv7 наоборот — nftables не будет никогда, и
-# iptables с legacy-симлинками стоит прямо в образе. В armv5 нет apk, там
-# rootfs уже содержит нужное.
+# Backend по модулю ядра. В образе arm64 и amd64 только nftables; iptables
+# докачивается, если ядро без nf_tables. На armv7 и armv5 он уже в образе.
 if ! lsmod 2>/dev/null | grep -q nf_tables; then
   if command -v apk >/dev/null 2>&1 && ! apk info -e iptables iptables-legacy >/dev/null 2>&1; then
     echo 'kernel has no nf_tables, installing iptables'
@@ -988,19 +968,14 @@ else
   fi
   printf 'nftables\n' > "$RUNTIME_DIR/firewall.backend"
 fi
-# Во что развернётся auto, решает проба возможностей ядра, а она стоит запуска
-# nft. Возможности ядра в рантайме не меняются, поэтому проба делается один
-# раз здесь, а панель читает готовый ответ и показывает настоящий режим, а не
-# слово auto.
+# Разворачиваем auto один раз, чтобы панель показывала режим, а не «auto».
 if LISTENER_MODE=auto /scripts/network.sh resolve > "$RUNTIME_DIR/listener.auto" 2>> "$RUNTIME_DIR/network.log"; then
   :
 else
   printf 'redir-tun\n' > "$RUNTIME_DIR/listener.auto"
 fi
 
-# md5crypt от admin. Умолчание задокументировано в README, как в соседних
-# контейнерах: панель должна открываться сразу после установки, а смена пароля
-# остаётся шагом пользователя.
+# md5crypt от admin, задокументирован в README.
 BASIC_AUTH_HASH_DEFAULT='$1$xrayremn$Gr4qGSm.dBD8OHZ43KD2a.'
 
 start_httpd() {
@@ -1018,9 +993,7 @@ start_httpd() {
 }
 
 start_process_jobs() {
-  # Воркер мог умереть, забрав задание с собой: файл уже переименован в .work,
-  # но обработать его некому. Возвращаем такие задания в очередь, иначе профиль
-  # молча зависнет в состоянии working до перезапуска контейнера.
+  # Задания, переименованные в .work умершим воркером, возвращаем в очередь.
   for orphan in "$JOBS_DIR"/p-*.job.work.*; do
     [ -f "$orphan" ] || continue
     orphan_job=${orphan%%.job.work.*}.job
@@ -1039,13 +1012,8 @@ start_refresh_worker() {
   REFRESH_PID=$!
 }
 
-# Сторож. Раньше httpd и оба воркера запускались и больше никем не
-# проверялись: падение любого из них означало исчезнувшую вебку или намертво
-# вставшую очередь заданий до ручного перезапуска контейнера. Сам сторож
-# намеренно состоит из одного kill -0 на процесс — падать в нём нечему.
-# Живёт в подшелле, поэтому STOPPING из основного процесса сюда не доходит и
-# цикл бесконечный: при завершении PID 1 ядро снимает всё, что осталось в
-# namespace контейнера.
+# Сторож httpd и воркеров. Живёт в подшелле, куда STOPPING не доходит, поэтому
+# цикл бесконечный: с завершением PID 1 его снимет ядро.
 watchdog() {
   while :; do
     sleep 5

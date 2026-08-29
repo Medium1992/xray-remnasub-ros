@@ -222,10 +222,8 @@ atomic_json() {
   cp "$json_source" "$json_temp" && chmod 600 "$json_temp" && mv "$json_temp" "$json_target"
 }
 
-# Скачивание geodata — самая долгая часть добавления подписки, и без строчки в
-# журнале она выглядела как зависшее «получение подписки». Формат совпадает с
-# event_log из lib.sh, файл тот же. В stdout не пишем под CGI: там это тело
-# HTTP-ответа.
+# Формат и файл те же, что у event_log. В stdout не пишем под CGI: там это
+# тело HTTP-ответа.
 progress() {
   progress_log=${EVENT_LOG:-/dev/shm/xray-remnasub/events.log}
   progress_line=$(printf '[%s] [INFO] [geodata] %s' "$(date '+%Y-%m-%d %H:%M:%S')" "$*")
@@ -233,9 +231,8 @@ progress() {
   [ -n "${GATEWAY_INTERFACE:-}" ] || [ -n "${REQUEST_METHOD:-}" ] || printf '%s\n' "$progress_line"
 }
 
-# Ищет файл с тем же именем и URL в уже подготовленных наборах и копирует его.
-# Источником считается только набор, чей манифест подтверждает тот же адрес,
-# иначе можно подсунуть geosite от другого провайдера.
+# Копирует файл из другого набора, если там тот же URL. Совпадение адреса
+# обязательно: иначе подставится geosite другого провайдера.
 reuse_asset() {
   reuse_file=$1 reuse_url=$2 reuse_target=$3
   for reuse_dir in "$ASSET_ROOT"/*; do
@@ -477,9 +474,7 @@ prepare() {
        startswith("geoip:") or startswith("geosite:") or
        startswith("ext:") or startswith("ext-ip:"))) as $needs_geodata |
     if $needs_geodata | not then
-      # Ни одной ссылки на геобазы — файлы читать некому. Своя секция geodata
-      # из подписки в этом случае тоже не нужна: она только заставит ядро
-      # ждать скачивания того, к чему никто не обратится.
+      # Ссылок на геобазы нет — своя секция подписки тоже не нужна.
       {generated:false,geodata:null,added_outbounds:[]}
     elif has("geodata") and .geodata != null then
       {generated:false,geodata:.geodata,added_outbounds:[]}
@@ -579,17 +574,9 @@ prepare() {
   records_file=$backup_dir/.records.tsv
   TEMP_PATHS="$stage_dir $backup_dir $TEMP_PATHS"
 
-  # Cron проверяется, но не исполняется. Расписание принадлежит самому Xray:
-  # app/geodata заводит планировщик и по нему скачивает свежие файлы через
-  # собственный outbound, атомарно подменяет их и перечитывает геобазы в
-  # памяти — всё это без перезапуска процесса. Контейнеру остаётся ровно одна
-  # обязанность, и она вынужденная: infra/conf/geodata.go вызывает StatAsset
-  # на каждый объявленный файл, поэтому отсутствующий ассет роняет разбор
-  # конфигурации, и ядро не стартует. Значит недостающее нужно создать до
-  # запуска — и больше ничего не трогать.
-  #
-  # Проверка cron здесь всё равно нужна: сломанное выражение иначе всплыло бы
-  # только при старте ядра, уже после скачивания.
+  # Cron проверяется, но не исполняется: расписание принадлежит Xray. Контейнер
+  # только создаёт недостающие файлы — без них infra/conf/geodata.go роняет
+  # разбор конфигурации на StatAsset.
   effective_cron=$(jq -r 'if .geodata == null then "" else .geodata.cron // "" end' "$manifest_json")
   jq -e 'if .geodata == null then true else ((.geodata.cron // "") | type == "string") end' "$manifest_json" >/dev/null || fail 'Geodata cron must be a string'
   now_epoch=${GEODATA_NOW:-$(date +%s)}
@@ -607,9 +594,7 @@ prepare() {
     asset_target=$ASSET_DIR/$asset_file
     path_is_safe "$ASSET_DIR" "$asset_file" || fail "Unsafe geodata asset target: $asset_file"
     if [ -f "$asset_target" ] && [ ! -L "$asset_target" ]; then
-      # Файл на месте — дальше он под ответственностью Xray, включая его
-      # свежесть. Перекачивать его здесь означало бы драться с ядром за один
-      # и тот же файл и без нужды писать в хранилище.
+      # Файл на месте — дальше он под ответственностью Xray.
       [ -s "$asset_target" ] && continue
     elif [ -e "$asset_target" ] || [ -L "$asset_target" ]; then
       fail "Geodata asset is not a regular file: $asset_file"
@@ -617,10 +602,8 @@ prepare() {
     [ "$ASSET_LEASED" = 0 ] || fail "Geodata asset is missing while this asset set is in use: $asset_file"
     asset_stage=$stage_dir/$asset_file
     mkdir -p "${asset_stage%/*}"
-    # Тот же URL мог уже скачаться в другой набор: наборы различаются целиком,
-    # и достаточно одного несовпавшего адреса, чтобы всё качалось заново.
-    # Копируем локально, чтобы у каждого набора остался свой файл — обновляет
-    # их Xray независимо, и общий inode здесь был бы опасен.
+    # У каждого набора свой файл: обновляет их Xray независимо, общий inode
+    # был бы опасен.
     if reuse_asset "$asset_file" "$asset_url" "$asset_stage"; then
       progress "$asset_file reused from an existing asset set"
       printf '%s\t%s\n' "$asset_file" "$asset_stage" >> "$publish_manifest"
@@ -642,10 +625,8 @@ prepare() {
 $(jq -r '.assets[] | [.file,.url] | @tsv' "$manifest_json")
 EOF
 
-  # Список адресов рядом с самими файлами: имя каталога — это хеш всего набора,
-  # и по нему нельзя понять, какой URL дал конкретный файл. Без этой записи
-  # соседний набор нельзя переиспользовать, не рискуя подсунуть geosite от
-  # другого провайдера.
+  # Список адресов рядом с файлами: имя каталога — хеш набора, по нему нельзя
+  # понять, какой URL дал файл.
   assets_record_tmp=$work_dir/assets-record.json
   if cp "$assets_json" "$assets_record_tmp" 2>/dev/null; then
     chmod 600 "$assets_record_tmp" 2>/dev/null || true
@@ -694,12 +675,8 @@ EOF
     [ -n "$asset_file" ] || continue
     asset_target=$ASSET_DIR/$asset_file
     [ -f "$asset_target" ] && [ -s "$asset_target" ] || fail "Prepared geodata asset is missing: $asset_file"
-    # common/platform.GetAssetLocation ищет файл сначала в xray.location.asset,
-    # а затем в /usr/local/share/xray, /usr/share/xray и /opt/share/xray. Куда
-    # путь разрешился, туда же загрузчик ядра потом и пишет обновления. Наличие
-    # файла в ASSET_DIR гарантирует, что выиграет наш каталог, но посторонняя
-    # копия в системном пути — признак того, что кто-то смонтировал её поверх;
-    # тогда стоит сказать об этом вслух, а не молча начать писать на флешку.
+    # GetAssetLocation ищет файл в xray.location.asset, затем в системных
+    # путях, и туда же пишет обновления. Посторонняя копия — повод предупредить.
     for asset_shadow in /usr/local/share/xray /usr/share/xray /opt/share/xray; do
       [ -e "$asset_shadow/$asset_file" ] || continue
       jq -cn --arg file "$asset_file" --arg message "A copy in $asset_shadow shadows the selected geodata storage" \

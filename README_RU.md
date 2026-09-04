@@ -334,12 +334,14 @@ nft list tables
 ```bash
 docker buildx build \
   --platform linux/arm64 \
-  --build-arg XRAY_VERSION=v26.7.28 \
+  --build-arg XRAY_CUSTOM_CORE=1   --build-arg XRAY_RELEASE_REPO=Medium1992/xray-proxy-ros   --build-arg XRAY_RELEASE_TAG=stable \
   --provenance=false \
   --sbom=false \
   -t xray-remnasub-ros:v26.7.28-arm64 \
   --load .
 ```
+
+Ядро берётся из катящегося релиза `stable` репозитория [xray-proxy-ros](https://github.com/Medium1992/xray-proxy-ros), где Xray собирается из исходников XTLS на свежем стабильном Go. Такое ядро сообщает о себе версию `X.Y.Z-ros`, её же показывает панель. Чтобы взять официальный бинарник XTLS, соберите с `--build-arg XRAY_CUSTOM_CORE=0 --build-arg XRAY_RELEASE_REPO=XTLS/Xray-core --build-arg XRAY_RELEASE_TAG=v26.7.28`; тот же выбор принимает воркфлоу публикации через ввод `xray_custom_core`.
 
 Новые версии Docker с containerd image store могут экспортировать OCI layout, который старые RouterOS не распознают. Для самого совместимого ручного импорта нужен legacy `docker-archive`, например через Skopeo:
 

@@ -275,12 +275,14 @@ nft list tables
 ```bash
 docker buildx build \
   --platform linux/arm64 \
-  --build-arg XRAY_VERSION=v26.7.28 \
+  --build-arg XRAY_CUSTOM_CORE=1   --build-arg XRAY_RELEASE_REPO=Medium1992/xray-proxy-ros   --build-arg XRAY_RELEASE_TAG=stable \
   --provenance=false \
   --sbom=false \
   -t xray-remnasub-ros:v26.7.28-arm64 \
   --load .
 ```
+
+The core comes from the rolling `stable` release of [xray-proxy-ros](https://github.com/Medium1992/xray-proxy-ros), where Xray is built from XTLS sources on the newest stable Go. Such a core reports itself as `X.Y.Z-ros`, and the panel shows that version. To take the official XTLS binary instead, build with `--build-arg XRAY_CUSTOM_CORE=0 --build-arg XRAY_RELEASE_REPO=XTLS/Xray-core --build-arg XRAY_RELEASE_TAG=v26.7.28`; the published workflow accepts the same choice as the `xray_custom_core` input.
 
 Docker versions using the containerd image store may export an OCI layout that older RouterOS releases cannot import. Convert it to a legacy `docker-archive`:
 

@@ -1,7 +1,9 @@
 FROM --platform=$BUILDPLATFORM alpine:latest AS package
 ARG TARGETARCH
 ARG TARGETVARIANT
-ARG XRAY_VERSION=v26.7.28
+ARG XRAY_CUSTOM_CORE=0
+ARG XRAY_RELEASE_REPO=XTLS/Xray-core
+ARG XRAY_RELEASE_TAG=v26.7.28
 RUN apk add --no-cache curl unzip
 RUN set -eu; \
     case "$TARGETARCH/$TARGETVARIANT" in \
@@ -11,10 +13,15 @@ RUN set -eu; \
       arm/v5) asset=Xray-linux-arm32-v5.zip ;; \
       *) echo "unsupported architecture: $TARGETARCH/$TARGETVARIANT" >&2; exit 1 ;; \
     esac; \
-    url="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/${asset}"; \
-    curl -fsSL --retry 5 --retry-all-errors "$url" -o /tmp/xray.zip; \
-    curl -fsSL --retry 5 --retry-all-errors "$url.dgst" -o /tmp/xray.zip.dgst; \
-    digest="$(awk -F'= ' '$1 == "SHA2-256" {print $2}' /tmp/xray.zip.dgst)"; \
+    base="https://github.com/${XRAY_RELEASE_REPO}/releases/download/${XRAY_RELEASE_TAG}"; \
+    curl -fsSL --retry 5 --retry-all-errors "$base/$asset" -o /tmp/xray.zip; \
+    if [ "$XRAY_CUSTOM_CORE" = 1 ]; then \
+      curl -fsSL --retry 5 --retry-all-errors "$base/sha256sums.txt" -o /tmp/sums; \
+      digest="$(awk -v a="$asset" '{ n = $2; sub(/^\.\//, "", n) } n == a { print $1 }' /tmp/sums)"; \
+    else \
+      curl -fsSL --retry 5 --retry-all-errors "$base/$asset.dgst" -o /tmp/xray.zip.dgst; \
+      digest="$(awk -F'= ' '$1 == "SHA2-256" {print $2}' /tmp/xray.zip.dgst)"; \
+    fi; \
     [ -n "$digest" ]; \
     printf '%s  %s\n' "$digest" /tmp/xray.zip | sha256sum -c -; \
     unzip -q /tmp/xray.zip xray -d /tmp/xray; \

@@ -296,3 +296,13 @@ gzip -9 xray-remnasub-ros-v26.7.28-arm64.tar
 A compatible archive contains `manifest.json`, `repositories`, and `*/layer.tar`, not `oci-layout` and `blobs/sha256/*`.
 
 `armv5` has no Alpine base image, so that platform builds from `scratch` plus the Buildroot `rootfs.tar` tracked in this repository.
+
+## 💖 Support the project
+
+If this saved you time configuring MikroTik and its scripts:
+
+- **USDT (TRC20):** `TWDDYD1nk5JnG6FxvEu2fyFqMCY9PcdEsJ`
+- **USDT (Polygon PoS):** `0xa4f2d9035e8bacf4cdff27904f03ecc5479f7e17`
+- [boosty.to/petersolomon/donate](https://boosty.to/petersolomon/donate)
+
+<img width="150" height="150" alt="petersolomon-donate" src="https://github.com/user-attachments/assets/fcf40baa-a09e-4188-a036-7ad3a77f06ea" />

@@ -111,6 +111,10 @@ The resulting runtime configuration and the provider's own JSON are available st
 
 Settings are split into tabs: Headers, Inbound traffic, Alpine network, Xray core, Overrides, Local inbounds, Geodata, Appearance and Access. Appearance offers seven themes and a custom accent colour; the choice is stored in the container and applies to everyone opening the panel.
 
+![Settings - overrides](/docs/screenshots/settings-overrides.png)
+
+![Settings - Alpine network](/docs/screenshots/settings-network.png)
+
 ![Settings - appearance](/docs/screenshots/settings-appearance.png)
 
 ## 🧾 Subscription Model

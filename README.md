@@ -251,6 +251,21 @@ MPTCP cannot be intercepted, so both backends drop TCP option 30 on the LAN inte
 
 Alpine normalizes the standard rules to `local=0`, `main=32766`, and `default=32767`. TPROXY adds `fwmark 1` in table `100` at priority `100`. TUN uses table `110` and priorities `10000..10005`.
 
+### Container socket TCP tuning
+
+The Alpine network tab tunes the container's own sockets, meaning Xray's outbound connections to your servers, not the clients' transit traffic. The container lives in its own network namespace, so some `net.ipv4.tcp_*` values are private to it and writable while others belong to RouterOS and are read-only. Each value is written separately, read back, and reported in the panel as applied, kernel value, read-only in the container, absent from this kernel, or algorithm unavailable in the kernel.
+
+| Setting | sysctl | Recommended | Why |
+|---|---|---|---|
+| Unsent buffer limit | `tcp_notsent_lowat` | 128 KB | with no limit a socket queues unbounded unsent data: wasted memory and bufferbloat |
+| Reset window after idle | `tcp_slow_start_after_idle` | off | long-lived mux and xhttp connections otherwise ramp up from scratch after a pause |
+| MTU probing | `tcp_mtu_probing` | on loss | rescues stalls behind PPPoE and tunnels that drop ICMP |
+| FIN_WAIT2 | `tcp_fin_timeout` | 30 s | how long half-closed sockets are held |
+| Congestion control | `tcp_congestion_control` | system | the list is whatever the RouterOS kernel provides |
+| Socket buffer ceiling | `tcp_rmem`/`tcp_wmem` | system | lower means less memory per connection at the cost of single-stream throughput on long links |
+
+"System" restores what the kernel had when the container started: the original values are captured once, on the first apply, so this is a rollback rather than "keep whatever was set before". Only the minimum and the ceiling change; the kernel's default stays as it was unless it exceeds the ceiling. The Recommended button fills the whole recommendation column at once, and like everything else it is stored only when you press Save.
+
 ## 💾 Storage
 
 `/etc/xray/remnasub` contains profiles, source subscriptions, response metadata, and — only when explicitly enabled — persistent geodata. Everything generated at runtime lives in `/dev/shm/xray-remnasub`: confdirs, status, jobs, events, logs, and memory geodata. That split is deliberate: the router's flash is small, and the container is built to leave it alone unless the user opts in.

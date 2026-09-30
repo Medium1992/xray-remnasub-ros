@@ -145,7 +145,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .control-actions { display: flex; align-items: center; gap: 8px; }
 .runtime-header-button { white-space: nowrap; }
 .settings-tabs { flex: 0 0 auto; padding: 8px 18px; border-bottom: 1px solid var(--border); background: var(--bar-bg); }
-.settings-tabs > div { width: min(790px, 100%); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 0 auto; padding: 3px; border-radius: 11px; background: var(--base-300); }
+.settings-tabs > div { width: min(790px, 100%); display: grid; grid-template-columns: repeat(auto-fit, minmax(95px, 1fr)); gap: 4px; margin: 0 auto; padding: 3px; border-radius: 11px; background: var(--base-300); }
 .settings-tabs button { min-width: 0; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 10px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; opacity: .68; font-size: 12px; font-weight: 650; white-space: nowrap; transition: color .15s ease, background .15s ease, opacity .15s ease; }
 .settings-tabs button:hover { color: var(--base-content); opacity: 1; background: var(--surface-hover); }
 .settings-tabs button.active { color: var(--primary-content); background: var(--primary); box-shadow: var(--shadow); opacity: 1; }
@@ -549,6 +549,13 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   .events-diagnostic-summary > span:nth-child(2) { border-right: 0; }
   .events-diagnostic-summary > span:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
 }
+
+.sysctl-state { justify-self: start; padding: 1px 7px; border-radius: 7px; color: var(--muted); background-color: rgba(var(--overlay-rgb), .05); font-size: 9px; font-style: normal; font-weight: 700; }
+.sysctl-state:empty { display: none; }
+.sysctl-state.good { color: var(--success); }
+.sysctl-state.warning { color: var(--warning); }
+.tcp-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tcp-title .secondary-button { min-height: 32px; font-size: 12px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }

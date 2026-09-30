@@ -311,8 +311,30 @@ status_response() {
   backend=$(cat "$RUNTIME_DIR/firewall.backend" 2>/dev/null || true)
   case "$backend" in nftables|iptables) ;; *) backend=iptables ;; esac
   xray_version=$(cat "$RUNTIME_DIR/xray.version" 2>/dev/null || true)
-  active_interface=$(ip -4 route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1);exit}}')
-  active_interface_cidr=; [ -z "$active_interface" ] || active_interface_cidr=$(ip -4 -o addr show dev "$active_interface" scope global 2>/dev/null | awk '{print $4;exit}')
+  # Интерфейс, адрес и статусы sysctl пишет network-alpine.sh: панель опрашивает
+  # статус каждые три секунды, и ip с awk на каждый опрос были лишними.
+  NET_IFACE= NET_CIDR= NET_TCP_CC_AVAILABLE=
+  SYSCTL_TCP_NOTSENT_LOWAT= SYSCTL_TCP_SLOW_START_AFTER_IDLE= SYSCTL_TCP_MTU_PROBING=
+  SYSCTL_TCP_FIN_TIMEOUT= SYSCTL_TCP_CONGESTION= SYSCTL_TCP_BUFFER_RMEM= SYSCTL_TCP_BUFFER_WMEM=
+  if [ -f "$NETWORK_INFO_FILE" ]; then
+    while IFS='=' read -r network_info_key network_info_value; do
+      case "$network_info_key" in
+        NET_IFACE|NET_CIDR|NET_TCP_CC_AVAILABLE|SYSCTL_TCP_*) ;;
+        *) continue ;;
+      esac
+      eval "$network_info_key=\$network_info_value"
+    done < "$NETWORK_INFO_FILE"
+  fi
+  case "$NET_IFACE" in *[!A-Za-z0-9@._-]*) NET_IFACE= ;; esac
+  case "$NET_CIDR" in *[!0-9./]*) NET_CIDR= ;; esac
+  case "$NET_TCP_CC_AVAILABLE" in *[![:alnum:]_[:blank:]]*) NET_TCP_CC_AVAILABLE= ;; esac
+  for sysctl_name in SYSCTL_TCP_NOTSENT_LOWAT SYSCTL_TCP_SLOW_START_AFTER_IDLE SYSCTL_TCP_MTU_PROBING \
+                     SYSCTL_TCP_FIN_TIMEOUT SYSCTL_TCP_CONGESTION SYSCTL_TCP_BUFFER_RMEM SYSCTL_TCP_BUFFER_WMEM; do
+    eval "sysctl_value=\${$sysctl_name}"
+    case "$sysctl_value" in applied|system|readonly|missing|unavailable) ;; *) eval "$sysctl_name=" ;; esac
+  done
+  active_interface=$NET_IFACE
+  active_interface_cidr=$NET_CIDR
   active_runtime_dir=$(profile_runtime_dir "$ACTIVE_PROFILE_ID" 2>/dev/null || true)
   effective_listener_mode=$LISTENER_MODE
   if [ -n "$active_runtime_dir" ]; then
@@ -368,6 +390,13 @@ EOF
     --argjson xray_log_dns "$XRAY_LOG_DNS" --argjson xray_log_mask_address "$XRAY_LOG_MASK_ADDRESS" \
     --arg global_headers_b64 "$GLOBAL_HEADERS_B64" \
     --arg network_qdisc "$NETWORK_QDISC" --argjson network_disable_ipv6 "$NETWORK_DISABLE_IPV6" --argjson network_disable_multicast "$NETWORK_DISABLE_MULTICAST" \
+    --arg network_tcp_notsent_lowat "$NETWORK_TCP_NOTSENT_LOWAT" --arg network_tcp_slow_start_after_idle "$NETWORK_TCP_SLOW_START_AFTER_IDLE" \
+    --arg network_tcp_mtu_probing "$NETWORK_TCP_MTU_PROBING" --arg network_tcp_fin_timeout "$NETWORK_TCP_FIN_TIMEOUT" \
+    --arg network_tcp_congestion "$NETWORK_TCP_CONGESTION" --arg network_tcp_buffer_max "$NETWORK_TCP_BUFFER_MAX" \
+    --arg tcp_congestion_available "$NET_TCP_CC_AVAILABLE" \
+    --arg sysctl_notsent_lowat "$SYSCTL_TCP_NOTSENT_LOWAT" --arg sysctl_slow_start_after_idle "$SYSCTL_TCP_SLOW_START_AFTER_IDLE" \
+    --arg sysctl_mtu_probing "$SYSCTL_TCP_MTU_PROBING" --arg sysctl_fin_timeout "$SYSCTL_TCP_FIN_TIMEOUT" \
+    --arg sysctl_congestion "$SYSCTL_TCP_CONGESTION" --arg sysctl_buffer_rmem "$SYSCTL_TCP_BUFFER_RMEM" --arg sysctl_buffer_wmem "$SYSCTL_TCP_BUFFER_WMEM" \
     --argjson network_ct_established "$NETWORK_CT_ESTABLISHED" --argjson network_ct_syn_sent "$NETWORK_CT_SYN_SENT" --argjson network_ct_syn_recv "$NETWORK_CT_SYN_RECV" \
     --argjson network_ct_fin_wait "$NETWORK_CT_FIN_WAIT" --argjson network_ct_close_wait "$NETWORK_CT_CLOSE_WAIT" --argjson network_ct_last_ack "$NETWORK_CT_LAST_ACK" \
     --argjson network_ct_time_wait "$NETWORK_CT_TIME_WAIT" --argjson network_ct_close "$NETWORK_CT_CLOSE" --argjson network_ct_unacknowledged "$NETWORK_CT_UNACKNOWLEDGED" --argjson network_ct_udp_stream "$NETWORK_CT_UDP_STREAM" \
@@ -385,7 +414,7 @@ EOF
     --argjson routing_rules_enabled "$ROUTING_RULES_ENABLED" --arg routing_rules_position "$ROUTING_RULES_POSITION" \
     --arg routing_rules "$(b64_decode "$ROUTING_RULES_B64")" \
     --arg ui_theme "$UI_THEME" --arg ui_accent "$UI_ACCENT" \
-    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,inbound_strip_socks:$inbound_strip_socks,dns_override_enabled:$dns_override_enabled,dns_override:$dns_override,routing_rules_enabled:$routing_rules_enabled,routing_rules_position:$routing_rules_position,routing_rules:$routing_rules,routing_rules_enabled:$routing_rules_enabled,routing_rules_position:$routing_rules_position,routing_rules:$routing_rules,inbound_strip_http:$inbound_strip_http,local_socks_enabled:$local_socks_enabled,local_socks_port:$local_socks_port,local_socks_user:$local_socks_user,local_socks_has_pass:$local_socks_has_pass,local_http_enabled:$local_http_enabled,local_http_port:$local_http_port,local_http_user:$local_http_user,local_http_has_pass:$local_http_has_pass,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
+    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,network_tcp_notsent_lowat:$network_tcp_notsent_lowat,network_tcp_slow_start_after_idle:$network_tcp_slow_start_after_idle,network_tcp_mtu_probing:$network_tcp_mtu_probing,network_tcp_fin_timeout:$network_tcp_fin_timeout,network_tcp_congestion:$network_tcp_congestion,network_tcp_buffer_max:$network_tcp_buffer_max,tcp_congestion_available:$tcp_congestion_available,sysctl:{notsent_lowat:$sysctl_notsent_lowat,slow_start_after_idle:$sysctl_slow_start_after_idle,mtu_probing:$sysctl_mtu_probing,fin_timeout:$sysctl_fin_timeout,congestion:$sysctl_congestion,buffer_rmem:$sysctl_buffer_rmem,buffer_wmem:$sysctl_buffer_wmem},xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,inbound_strip_socks:$inbound_strip_socks,dns_override_enabled:$dns_override_enabled,dns_override:$dns_override,routing_rules_enabled:$routing_rules_enabled,routing_rules_position:$routing_rules_position,routing_rules:$routing_rules,inbound_strip_http:$inbound_strip_http,local_socks_enabled:$local_socks_enabled,local_socks_port:$local_socks_port,local_socks_user:$local_socks_user,local_socks_has_pass:$local_socks_has_pass,local_http_enabled:$local_http_enabled,local_http_port:$local_http_port,local_http_user:$local_http_user,local_http_has_pass:$local_http_has_pass,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
   status_result=$?
   rm -f "$status_profiles" "$status_events"
   rm -f "$status_configs"
@@ -1044,6 +1073,8 @@ EOF
     fi
     [ "$ROUTING_RULES_ENABLED" = 0 ] || [ -n "$ROUTING_RULES_B64" ] || reply_error "Routing rules are empty"
     LOCAL_SOCKS_ENABLED=$(form_value local_socks_enabled); LOCAL_HTTP_ENABLED=$(form_value local_http_enabled)
+    case "$LOCAL_SOCKS_ENABLED" in 1) ;; *) LOCAL_SOCKS_ENABLED=0 ;; esac
+    case "$LOCAL_HTTP_ENABLED" in 1) ;; *) LOCAL_HTTP_ENABLED=0 ;; esac
     value=$(form_value local_socks_port); [ -z "$value" ] || LOCAL_SOCKS_PORT=$value
     value=$(form_value local_http_port); [ -z "$value" ] || LOCAL_HTTP_PORT=$value
     LOCAL_SOCKS_USER_B64=$(b64_encode "$(form_value local_socks_user)")
@@ -1080,6 +1111,12 @@ EOF
     value=$(form_value network_ct_close); [ -z "$value" ] || NETWORK_CT_CLOSE=$value
     value=$(form_value network_ct_unacknowledged); [ -z "$value" ] || NETWORK_CT_UNACKNOWLEDGED=$value
     value=$(form_value network_ct_udp_stream); [ -z "$value" ] || NETWORK_CT_UDP_STREAM=$value
+    value=$(form_value network_tcp_notsent_lowat); [ -z "$value" ] || NETWORK_TCP_NOTSENT_LOWAT=$value
+    value=$(form_value network_tcp_slow_start_after_idle); [ -z "$value" ] || NETWORK_TCP_SLOW_START_AFTER_IDLE=$value
+    value=$(form_value network_tcp_mtu_probing); [ -z "$value" ] || NETWORK_TCP_MTU_PROBING=$value
+    value=$(form_value network_tcp_fin_timeout); [ -z "$value" ] || NETWORK_TCP_FIN_TIMEOUT=$value
+    value=$(form_value network_tcp_congestion); [ -z "$value" ] || NETWORK_TCP_CONGESTION=$value
+    value=$(form_value network_tcp_buffer_max); [ -z "$value" ] || NETWORK_TCP_BUFFER_MAX=$value
     value=$(form_value xray_sniffing_enabled); [ -z "$value" ] || XRAY_SNIFFING_ENABLED=$value
     value=$(form_value xray_sniffing_route_only); [ -z "$value" ] || XRAY_SNIFFING_ROUTE_ONLY=$value
     probe_url=$(form_value xray_probe_url)
@@ -1090,9 +1127,20 @@ EOF
     valid_number "$REDIR_PORT" && [ "$REDIR_PORT" -ge 1 ] && [ "$REDIR_PORT" -le 65535 ] || reply_error 'Invalid REDIR port'
     valid_number "$TPROXY_PORT" && [ "$TPROXY_PORT" -ge 1 ] && [ "$TPROXY_PORT" -le 65535 ] || reply_error 'Invalid TPROXY port'
     [ "$REDIR_PORT" != "$TPROXY_PORT" ] || reply_error 'REDIR and TPROXY ports must differ'
-    for reserved_port in 80 1080; do
-      [ "$REDIR_PORT" != "$reserved_port" ] && [ "$TPROXY_PORT" != "$reserved_port" ] || reply_error 'Port is reserved by Xray RemnaSub'
+    valid_number "$LOCAL_SOCKS_PORT" && [ "$LOCAL_SOCKS_PORT" -ge 1 ] && [ "$LOCAL_SOCKS_PORT" -le 65535 ] || reply_error 'Invalid local SOCKS port'
+    valid_number "$LOCAL_HTTP_PORT" && [ "$LOCAL_HTTP_PORT" -ge 1 ] && [ "$LOCAL_HTTP_PORT" -le 65535 ] || reply_error 'Invalid local HTTP port'
+    # Порт панели занят busybox httpd, остальные — входами самого Xray. Конфликт
+    # виден только при запуске: `xray -test` портов не открывает, а ядро потом
+    # падает на bind и уходит в бесконечный перезапуск.
+    [ "$REDIR_PORT" != 80 ] && [ "$TPROXY_PORT" != 80 ] || reply_error 'Port 80 belongs to the web panel'
+    for occupied_port in "$REDIR_PORT" "$TPROXY_PORT" 80; do
+      [ "$LOCAL_SOCKS_ENABLED" = 0 ] || [ "$LOCAL_SOCKS_PORT" != "$occupied_port" ] ||
+        reply_error "Local SOCKS port $LOCAL_SOCKS_PORT is already used by the container"
+      [ "$LOCAL_HTTP_ENABLED" = 0 ] || [ "$LOCAL_HTTP_PORT" != "$occupied_port" ] ||
+        reply_error "Local HTTP port $LOCAL_HTTP_PORT is already used by the container"
     done
+    [ "$LOCAL_SOCKS_ENABLED" = 0 ] || [ "$LOCAL_HTTP_ENABLED" = 0 ] || [ "$LOCAL_SOCKS_PORT" != "$LOCAL_HTTP_PORT" ] ||
+      reply_error 'Local SOCKS and HTTP ports must differ'
     case "$LOG_LEVEL" in none|debug|info|warning|error) ;; *) reply_error 'Invalid log level' ;; esac
     case "$NETWORK_QDISC" in system|fq_codel|cake|codel|sfq|pfifo|bfifo) ;; *) reply_error 'Invalid qdisc' ;; esac
     case "$NETWORK_DISABLE_IPV6" in 0|1) ;; *) NETWORK_DISABLE_IPV6=1 ;; esac
@@ -1100,6 +1148,16 @@ EOF
     for timeout_value in "$NETWORK_CT_ESTABLISHED" "$NETWORK_CT_SYN_SENT" "$NETWORK_CT_SYN_RECV" "$NETWORK_CT_FIN_WAIT" "$NETWORK_CT_CLOSE_WAIT" "$NETWORK_CT_LAST_ACK" "$NETWORK_CT_TIME_WAIT" "$NETWORK_CT_CLOSE" "$NETWORK_CT_UNACKNOWLEDGED" "$NETWORK_CT_UDP_STREAM"; do
       valid_number "$timeout_value" && [ "$timeout_value" -ge 1 ] && [ "$timeout_value" -le 604800 ] || reply_error 'Conntrack timeouts must be 1..604800 seconds'
     done
+    sysctl_number_in_range() {
+      case "$1" in system) return 0 ;; esac
+      valid_number "$1" && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+    }
+    sysctl_number_in_range "$NETWORK_TCP_NOTSENT_LOWAT" 0 268435456 || reply_error 'Unsent buffer limit must be 0..268435456 bytes or system'
+    case "$NETWORK_TCP_SLOW_START_AFTER_IDLE" in system|0|1) ;; *) reply_error 'Slow start after idle must be 0, 1 or system' ;; esac
+    case "$NETWORK_TCP_MTU_PROBING" in system|0|1|2) ;; *) reply_error 'MTU probing must be 0, 1, 2 or system' ;; esac
+    sysctl_number_in_range "$NETWORK_TCP_FIN_TIMEOUT" 1 600 || reply_error 'FIN timeout must be 1..600 seconds or system'
+    case "$NETWORK_TCP_CONGESTION" in ''|*[!a-z0-9_]*) reply_error 'Invalid congestion control algorithm' ;; esac
+    sysctl_number_in_range "$NETWORK_TCP_BUFFER_MAX" 65536 536870912 || reply_error 'Socket buffer ceiling must be 65536..536870912 bytes or system'
     case "$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY" in [01]:[01]) ;; *) reply_error 'Invalid sniffing settings' ;; esac
     case "$probe_url" in http://*|https://*) ;; *) reply_error 'Health check URL must use HTTP or HTTPS' ;; esac
     case "$probe_url" in *[[:space:]]*) reply_error 'Health check URL must not contain whitespace' ;; esac

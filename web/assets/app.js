@@ -545,6 +545,9 @@
       model.network_ct_syn_recv, model.network_ct_fin_wait, model.network_ct_close_wait,
       model.network_ct_last_ack, model.network_ct_time_wait, model.network_ct_close,
       model.network_ct_udp_stream, model.xray_sniffing_enabled, model.xray_sniffing_route_only,
+      model.network_tcp_notsent_lowat, model.network_tcp_slow_start_after_idle, model.network_tcp_mtu_probing,
+      model.network_tcp_fin_timeout, model.network_tcp_congestion, model.network_tcp_buffer_max,
+      model.tcp_congestion_available, model.sysctl,
       model.xray_probe_url, model.xray_probe_timeout_seconds, model.xray_probe_http_method,
       model.geodata_storage, model.geodata_asset_dir, model.geodata_asset_count,
       model.geodata_total_bytes, model.geodata_last_update, model.geodata_warning,
@@ -614,6 +617,63 @@
     $("geodata-api-warning").classList.toggle("hidden", !warning);
   }
 
+  const TCP_TUNING_RECOMMENDED = {
+    "network-tcp-notsent-lowat": "131072",
+    "network-tcp-slow-start-after-idle": "0",
+    "network-tcp-mtu-probing": "1",
+    "network-tcp-fin-timeout": "30",
+    "network-tcp-congestion": "system",
+    "network-tcp-buffer-max": "system",
+  };
+  const SYSCTL_LABELS = {
+    applied: ["применено", "good"],
+    system: ["значение ядра", ""],
+    readonly: ["только чтение в контейнере", "warning"],
+    missing: ["нет в этом ядре", "warning"],
+    unavailable: ["алгоритм недоступен в ядре", "warning"],
+  };
+
+  // Значение, которого нет среди готовых вариантов, добавляется отдельным
+  // пунктом, а не теряется молча.
+  function setSelectValue(select, value, label) {
+    if (![...select.options].some((option) => option.value === value)) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label(value);
+      select.append(option);
+    }
+    select.value = value;
+  }
+
+  function renderTcpTuning() {
+    const congestion = $("network-tcp-congestion");
+    const available = String(model.tcp_congestion_available || "").split(/\s+/).filter(Boolean);
+    congestion.replaceChildren(...["system", ...available].map((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value === "system" ? "Системный" : value;
+      return option;
+    }));
+    setSelectValue(congestion, model.network_tcp_congestion || "system", (value) => `${value} (нет в ядре)`);
+    setSelectValue($("network-tcp-notsent-lowat"), String(model.network_tcp_notsent_lowat || "131072"), (value) => `${Math.round(Number(value) / 1024)} КБ`);
+    $("network-tcp-slow-start-after-idle").value = String(model.network_tcp_slow_start_after_idle ?? "0");
+    $("network-tcp-mtu-probing").value = String(model.network_tcp_mtu_probing ?? "1");
+    setSelectValue($("network-tcp-fin-timeout"), String(model.network_tcp_fin_timeout || "30"), (value) => `${value} с`);
+    $("network-tcp-buffer-max").value = String(model.network_tcp_buffer_max || "system");
+    renderSysctlStates();
+  }
+
+  function renderSysctlStates() {
+    const sysctl = model.sysctl || {};
+    all("[data-sysctl]").forEach((node) => {
+      const states = node.dataset.sysctl.split(",").map((key) => sysctl[key]).filter(Boolean);
+      const worst = states.find((value) => ["readonly", "missing", "unavailable"].includes(value)) || states[0] || "";
+      const [text, kind] = SYSCTL_LABELS[worst] || ["", ""];
+      node.textContent = text;
+      node.className = `sysctl-state ${kind}`;
+    });
+  }
+
   function renderSettings(force = false) {
     const fingerprint = settingsStateSignature();
     if (!force && (ui.settingsDirty || fingerprint === settingsFingerprint)) return;
@@ -674,6 +734,7 @@
     ui.settingsDirty = false;
     applyCurrentTheme();
     renderThemeControls();
+    renderTcpTuning();
     updateListenerDescription();
     updateSniffingFields();
     updateGeodataFields();
@@ -1121,6 +1182,12 @@
         network_ct_time_wait: $("network-ct-time-wait").value,
         network_ct_close: $("network-ct-close").value,
         network_ct_udp_stream: $("network-ct-udp-stream").value,
+        network_tcp_notsent_lowat: $("network-tcp-notsent-lowat").value,
+        network_tcp_slow_start_after_idle: $("network-tcp-slow-start-after-idle").value,
+        network_tcp_mtu_probing: $("network-tcp-mtu-probing").value,
+        network_tcp_fin_timeout: $("network-tcp-fin-timeout").value,
+        network_tcp_congestion: $("network-tcp-congestion").value,
+        network_tcp_buffer_max: $("network-tcp-buffer-max").value,
         xray_sniffing_enabled: $("xray-sniffing-enabled").checked ? "1" : "0",
         xray_sniffing_route_only: $("xray-sniffing-route-only").checked ? "1" : "0",
         xray_probe_url: $("xray-probe-url").value.trim(),
@@ -1268,6 +1335,12 @@
   });
   all('input[name="listener-mode"]').forEach((input) => input.addEventListener("change", updateListenerDescription));
   all('input[name="geodata-storage"]').forEach((input) => input.addEventListener("change", updateGeodataFields));
+  $("reset-tcp-tuning").addEventListener("click", () => {
+    Object.entries(TCP_TUNING_RECOMMENDED).forEach(([id, value]) => {
+      setSelectValue($(id), value, (unknown) => unknown);
+    });
+    ui.settingsDirty = true;
+  });
   $("xray-sniffing-enabled").addEventListener("change", updateSniffingFields);
   $("dns-override-enabled").addEventListener("change", updateDnsOverrideFields);
   $("routing-rules-enabled").addEventListener("change", updateRoutingRulesFields);

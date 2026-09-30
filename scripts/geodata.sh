@@ -10,6 +10,8 @@ PERSISTENT_ROOT=${GEODATA_PERSISTENT_ROOT:-/etc/xray/remnasub/geodata}
 LOCK_ROOT=${GEODATA_LOCK_ROOT:-/dev/shm/xray-remnasub/geodata-locks}
 WORK_ROOT=${GEODATA_WORK_ROOT:-/dev/shm/xray-remnasub}
 LOCK_OWNER_GRACE_ATTEMPTS=50
+# Обновление по кнопке в панели: файлы качаются заново, даже если они на месте.
+FORCE_REFRESH=${GEODATA_FORCE_REFRESH:-0}
 LOCK_MAX_ATTEMPTS=${GEODATA_LOCK_MAX_ATTEMPTS:-600}
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 CRON_FILTER=$SCRIPT_DIR/geodata-cron.jq
@@ -597,8 +599,10 @@ prepare() {
     asset_target=$ASSET_DIR/$asset_file
     path_is_safe "$ASSET_DIR" "$asset_file" || fail "Unsafe geodata asset target: $asset_file"
     if [ -f "$asset_target" ] && [ ! -L "$asset_target" ]; then
-      # Файл на месте — дальше он под ответственностью Xray.
-      [ -s "$asset_target" ] && continue
+      # Файл на месте — дальше он под ответственностью Xray. Принудительное
+      # обновление скачивает его заново: тем же атомарным переносом, каким
+      # обновляет файлы сам Xray, поэтому работающему ядру это не мешает.
+      [ -s "$asset_target" ] && [ "$FORCE_REFRESH" != 1 ] && continue
     elif [ -e "$asset_target" ] || [ -L "$asset_target" ]; then
       fail "Geodata asset is not a regular file: $asset_file"
     fi
@@ -607,7 +611,7 @@ prepare() {
     mkdir -p "${asset_stage%/*}"
     # У каждого набора свой файл: обновляет их Xray независимо, общий inode
     # был бы опасен.
-    if reuse_asset "$asset_file" "$asset_url" "$asset_stage"; then
+    if [ "$FORCE_REFRESH" != 1 ] && reuse_asset "$asset_file" "$asset_url" "$asset_stage"; then
       progress "$asset_file reused from an existing asset set"
       printf '%s\t%s\n' "$asset_file" "$asset_stage" >> "$publish_manifest"
       continue

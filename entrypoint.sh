@@ -59,11 +59,13 @@ initialize_storage() {
     XRAY_SNIFFING_ENABLED=1 XRAY_SNIFFING_ROUTE_ONLY=1
     DNS_OVERRIDE_ENABLED=0 DNS_OVERRIDE_B64=
     ROUTING_RULES_ENABLED=0 ROUTING_RULES_POSITION=before ROUTING_RULES_B64=
+    EXTRA_OUTBOUNDS_ENABLED=0 EXTRA_OUTBOUNDS_B64=
     INBOUND_STRIP_SOCKS=1 INBOUND_STRIP_HTTP=1
     LOCAL_SOCKS_ENABLED=0 LOCAL_SOCKS_PORT=1080 LOCAL_SOCKS_USER_B64= LOCAL_SOCKS_PASS_B64=
     LOCAL_HTTP_ENABLED=0 LOCAL_HTTP_PORT=1081 LOCAL_HTTP_USER_B64= LOCAL_HTTP_PASS_B64=
     XRAY_PROBE_URL_B64=aHR0cHM6Ly93d3cuZ3N0YXRpYy5jb20vZ2VuZXJhdGVfMjA0 XRAY_PROBE_TIMEOUT_SECONDS=5 XRAY_PROBE_HTTP_METHOD=HEAD
     GEODATA_STORAGE=memory
+    FAILOVER_ENABLED=0 FAILOVER_INTERVAL_SECONDS=300
     UI_THEME=auto UI_ACCENT=
     write_state
   fi
@@ -340,9 +342,12 @@ process_checks() {
         BUILD_OVERRIDE_RULES_ENABLED=$(state_get "$request" ROUTING_RULES_ENABLED 0)
         BUILD_OVERRIDE_RULES_POSITION=$(state_get "$request" ROUTING_RULES_POSITION before)
         BUILD_OVERRIDE_RULES_B64=$(state_get "$request" ROUTING_RULES_B64)
+        BUILD_OVERRIDE_OUTBOUNDS_ENABLED=$(state_get "$request" EXTRA_OUTBOUNDS_ENABLED 0)
+        BUILD_OVERRIDE_OUTBOUNDS_B64=$(state_get "$request" EXTRA_OUTBOUNDS_B64)
         BUILD_QUIET=1
         BUILD_DEFER_INSTALL=1
-        export BUILD_QUIET BUILD_DEFER_INSTALL BUILD_OVERRIDE_ACTIVE           BUILD_OVERRIDE_DNS_ENABLED BUILD_OVERRIDE_DNS_B64           BUILD_OVERRIDE_RULES_ENABLED BUILD_OVERRIDE_RULES_POSITION BUILD_OVERRIDE_RULES_B64
+        export BUILD_QUIET BUILD_DEFER_INSTALL BUILD_OVERRIDE_ACTIVE           BUILD_OVERRIDE_DNS_ENABLED BUILD_OVERRIDE_DNS_B64           BUILD_OVERRIDE_RULES_ENABLED BUILD_OVERRIDE_RULES_POSITION BUILD_OVERRIDE_RULES_B64 \
+          BUILD_OVERRIDE_OUTBOUNDS_ENABLED BUILD_OVERRIDE_OUTBOUNDS_B64
         if build_xray_config "$check_id"; then
           check_message='Конфигурация собрана и принята ядром'
           check_state=ok
@@ -1247,9 +1252,78 @@ start_refresh_worker() {
   REFRESH_PID=$!
 }
 
+# Автопереключение конфигурации. Проверка и выбор делаются теми же
+# endpoint'ами, что и по кнопке в панели: CGI-скрипт — обычная программа, и
+# вызвать его напрямую дешевле и честнее, чем держать вторую копию логики
+# проб на 400 строк.
+api_call() {
+  api_action=$1 api_body=${2:-}
+  REQUEST_METHOD=POST   QUERY_STRING="action=$api_action"   HTTP_HOST=localhost   HTTP_ORIGIN=http://localhost   CONTENT_LENGTH=${#api_body}   GATEWAY_INTERFACE=CGI/1.1     /www/cgi-bin/api <<API_REQUEST_BODY | awk 'body { print } /^
+?$/ { body = 1 }'
+$api_body
+API_REQUEST_BODY
+}
+
+failover_worker() {
+  failover_failures=0
+  failover_profile=
+  while :; do
+    sleep 15
+    load_settings
+    if [ "$FAILOVER_ENABLED" != 1 ] || [ "$RUN_ENABLED" != 1 ]; then
+      failover_failures=0
+      continue
+    fi
+    [ "$failover_profile" = "$ACTIVE_PROFILE_ID" ] || failover_failures=0
+    failover_profile=$ACTIVE_PROFILE_ID
+    failover_pid=$(cat "$RUNTIME_DIR/xray.pid" 2>/dev/null || true)
+    valid_number "$failover_pid" && kill -0 "$failover_pid" 2>/dev/null || continue
+    [ ! -f "$JOBS_DIR/$ACTIVE_PROFILE_ID.job" ] || continue
+    failover_last=$(cat "$RUNTIME_DIR/failover.at" 2>/dev/null || printf 0)
+    valid_number "$failover_last" || failover_last=0
+    failover_now=$(date +%s)
+    [ $((failover_now - failover_last)) -ge "$FAILOVER_INTERVAL_SECONDS" ] || continue
+    printf '%s\n' "$failover_now" > "$RUNTIME_DIR/failover.at"
+    failover_results=$(api_call probe-all "profile_id=$ACTIVE_PROFILE_ID" 2>/dev/null || true)
+    printf '%s' "$failover_results" | jq -e '.ok == true' >/dev/null 2>&1 || continue
+    failover_selected=$(state_get "$(profile_path "$ACTIVE_PROFILE_ID")" SELECTED_INDEX 0)
+    valid_number "$failover_selected" || failover_selected=0
+    failover_alive_now=$(printf '%s' "$failover_results" | jq -r --argjson index "$failover_selected"       '[.results[]? | select(.index == $index) | select(.delay_ms != null)] | length' 2>/dev/null || printf 0)
+    valid_number "$failover_alive_now" || failover_alive_now=0
+    if [ "$failover_alive_now" != 0 ]; then
+      [ "$failover_failures" = 0 ] || event_log INFO "$ACTIVE_PROFILE_ID" 'active configuration answers again'
+      failover_failures=0
+      continue
+    fi
+    failover_failures=$((failover_failures + 1))
+    event_log INFO "$ACTIVE_PROFILE_ID"       "active configuration did not answer the health check ($failover_failures in a row)"
+    [ "$failover_failures" -ge 2 ] || continue
+    # Самая быстрая из живых, кроме текущей: переключаться на такую же мёртвую
+    # смысла нет, а порядок в подписке ничего не обещает.
+    failover_target=$(printf '%s' "$failover_results" | jq -r --argjson index "$failover_selected"       '[.results[]? | select(.index != $index) | select(.delay_ms != null)] | sort_by(.delay_ms) | first | .index // empty' 2>/dev/null || true)
+    if ! valid_number "$failover_target"; then
+      event_log ERROR "$ACTIVE_PROFILE_ID" 'no other configuration answers either; staying on the current one'
+      failover_failures=0
+      continue
+    fi
+    if printf '%s' "$(api_call select-config "profile_id=$ACTIVE_PROFILE_ID&config_index=$failover_target")" |
+       jq -e '.ok == true' >/dev/null 2>&1; then
+      event_log INFO "$ACTIVE_PROFILE_ID" "switched to configuration $((failover_target + 1)) automatically"
+    else
+      event_log ERROR "$ACTIVE_PROFILE_ID" 'could not switch the configuration automatically'
+    fi
+    failover_failures=0
+  done
+}
+
 start_process_checks() {
   process_checks &
   CHECKS_PID=$!
+}
+
+start_failover_worker() {
+  failover_worker &
+  FAILOVER_PID=$!
 }
 
 # Сторож httpd и воркеров. Живёт в подшелле, куда STOPPING не доходит, поэтому
@@ -1273,6 +1347,10 @@ watchdog() {
       event_log ERROR system 'override check worker stopped; restarting it'
       start_process_checks
     fi
+    if ! kill -0 "$FAILOVER_PID" 2>/dev/null; then
+      event_log ERROR system 'failover worker stopped; restarting it'
+      start_failover_worker
+    fi
   done
 }
 
@@ -1281,6 +1359,7 @@ event_log INFO system 'Web UI started on port 80'
 start_process_jobs
 start_refresh_worker
 start_process_checks
+start_failover_worker
 watchdog &
 supervisor
 stop

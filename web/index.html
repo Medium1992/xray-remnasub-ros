@@ -79,7 +79,7 @@
       </section>
 
       <section class="page" data-page="settings">
-        <header class="control-bar"><div><h1>Настройки</h1><p>Параметры контейнера</p></div><button class="primary-button" type="submit" form="settings-form" id="save-settings"><svg><use href="#i-check"/></svg><span>Сохранить</span></button></header>
+        <header class="control-bar"><div><h1>Настройки</h1><p>Параметры контейнера</p></div><span class="settings-dirty hidden" id="settings-dirty">Есть несохранённые изменения</span><button class="primary-button" type="submit" form="settings-form" id="save-settings"><svg><use href="#i-check"/></svg><span>Сохранить</span></button></header>
         <nav class="settings-tabs" aria-label="Разделы настроек">
           <div>
             <button class="active" type="button" data-settings-tab="requests"><svg><use href="#i-link"/></svg><span>Заголовки</span></button>
@@ -172,6 +172,8 @@
                 <label class="setting-row switch-row"><span><b>Только маршрутизация</b><small>Не подменять адрес назначения после sniffing</small></span><input id="xray-sniffing-route-only" type="checkbox"><i></i></label>
                 <label class="text-setting compact"><span><b>URL HTTP-проверки</b><small>Резервный адрес, если его не задаёт подходящий observatory или burstObservatory</small></span><input id="xray-probe-url" type="url" maxlength="2048" value="https://www.gstatic.com/generate_204" required></label>
                 <label class="text-setting compact"><span><b>Таймаут HTTP-проверки</b><small>Резерв для конфигураций без observatory и для burstObservatory без timeout</small></span><input id="xray-probe-timeout-seconds" type="number" min="1" max="30" step="1" value="5" required></label>
+                <label class="setting-row switch-row"><span><b>Автопереключение конфигурации</b><small>Если активная конфигурация дважды подряд не отвечает на HTTP-проверку, контейнер переключится на самую быструю из живых</small></span><input id="failover-enabled" type="checkbox"><i></i></label>
+                <label class="text-setting compact" data-failover><span><b>Интервал проверки, сек.</b><small>Каждая проверка поднимает отдельный экземпляр ядра рядом с работающим</small></span><input id="failover-interval-seconds" type="number" min="60" max="86400" step="10" value="300" required></label>
                 <label class="setting-row setting-select-row"><span><b>Метод HTTP-проверки</b><small>Резерв для конфигураций без observatory и для burstObservatory без метода</small></span><select id="xray-probe-http-method"><option value="HEAD">HEAD</option><option value="GET">GET</option></select></label>
               </div>
               <aside class="settings-callout xray-runtime-callout"><svg><use href="#i-terminal"/></svg><div><b>Исходная конфигурация сохраняется</b><p>Выбранный полный JSON остаётся отдельным файлом без изменений. Рядом создаются локальные фрагменты входящего трафика RouterOS, уровня журнала и geodata, необходимые контейнеру.</p></div></aside>
@@ -185,6 +187,12 @@
                   <div class="header-editor-intro"><span><b>JSON раздела <code>dns</code></b><small>Объект целиком, как в конфигурации Xray. Проверяется при сохранении и перед запуском ядра.</small></span></div>
                   <textarea id="dns-override" class="config-viewer json-viewer" rows="12" spellcheck="false" autocomplete="off" placeholder='{&#10;  "servers": ["https://dns.example/dns-query", "1.1.1.1"],&#10;  "queryStrategy": "UseIPv4"&#10;}'></textarea>
                   <p class="settings-note">Документация Xray: <a href="https://xtls.github.io/config/dns.html" target="_blank" rel="noopener noreferrer">раздел dns</a> · <a href="https://xtls.github.io/config/dns.html#serverobject" target="_blank" rel="noopener noreferrer">ServerObject</a> · <a href="https://xtls.github.io/config/base/dns.html" target="_blank" rel="noopener noreferrer">как работает DNS в Xray</a>. Если здесь встретятся <code>geosite:</code> или <code>geoip:</code>, geodata будет скачана.</p>
+                </div>
+                <label class="setting-row switch-row"><span><b>Свои outbounds</b><small>Добавляются к outbounds подписки, а не заменяют их. Полезно для своего <code>block</code>, <code>dns</code> или отдельного канала под правило</small></span><input id="extra-outbounds-enabled" type="checkbox"><i></i></label>
+                <div class="compound-setting" data-extra-outbounds>
+                  <div class="header-editor-intro"><span><b>Массив <code>outbounds</code></b><small>Объектами, у каждого обязательны <code>protocol</code> и <code>tag</code>. Тег, уже занятый подпиской, отклоняется: иначе её outbound был бы молча перекрыт. Добавляются в конец списка — Xray без правил отправляет трафик в первый.</small></span></div>
+                  <textarea id="extra-outbounds" class="config-viewer json-viewer" rows="8" spellcheck="false" autocomplete="off" placeholder='[&#10;  { "protocol": "blackhole", "tag": "container-block" }&#10;]'></textarea>
+                  <p class="settings-note">Документация Xray: <a href="https://xtls.github.io/config/outbound.html" target="_blank" rel="noopener noreferrer">раздел outbounds</a> · <a href="https://xtls.github.io/config/outbounds/blackhole.html" target="_blank" rel="noopener noreferrer">blackhole</a> · <a href="https://xtls.github.io/config/outbounds/freedom.html" target="_blank" rel="noopener noreferrer">freedom</a>.</p>
                 </div>
                 <label class="setting-row switch-row"><span><b>Свои правила маршрутизации</b><small>Добавляются к правилам подписки, а не заменяют их</small></span><input id="routing-rules-enabled" type="checkbox"><i></i></label>
                 <div class="compound-setting" data-routing-rules>
@@ -225,7 +233,7 @@
                 <label class="setting-row radio-row"><span><b>Постоянное хранилище</b><small><code>/etc/xray/remnasub/geodata</code> на подключённом накопителе, файлы сохраняются после перезапуска</small></span><input type="radio" name="geodata-storage" value="persistent"></label>
               </div>
               <aside class="settings-callout warning-callout geodata-memory-warning" id="geodata-memory-warning"><svg><use href="#i-alert"/></svg><div><b>Geodata хранится в оперативной памяти</b><p>Файлы в <code>/dev/shm</code> исчезнут при перезапуске контейнера и будут скачаны заново до проверки конфигурации и запуска Xray.</p></div></aside>
-              <div class="settings-title override-subtitle"><h2>Состояние файлов</h2><p>Данные активного хранилища</p></div>
+              <div class="settings-title override-subtitle check-title"><div><h2>Состояние файлов</h2><p>Данные активного хранилища</p></div><button class="secondary-button" type="button" id="geodata-refresh"><svg><use href="#i-refresh"/></svg>Скачать заново</button></div>
               <div class="settings-grid">
                 <div class="setting-row"><span><b>Активный каталог</b><small>Путь последней применённой конфигурации Xray</small></span><strong class="geodata-status-value" id="geodata-asset-dir">/dev/shm/xray-remnasub/geodata</strong></div>
                 <div class="setting-row"><span><b>Файлы</b><small>Подготовленные ресурсы geodata</small></span><strong id="geodata-asset-count">Нет данных</strong></div>
@@ -254,6 +262,12 @@
                 <div class="password-hash-result hidden" id="basic-auth-hash-result"><span><b>BASIC_AUTH_HASH</b><small id="basic-auth-hash-algorithm">Значение для переменной окружения контейнера</small></span><span class="copy-field"><input id="basic-auth-hash" type="text" readonly spellcheck="false"><button class="icon-button" type="button" id="copy-basic-auth-hash" title="Копировать хеш"><svg><use href="#i-copy"/></svg></button></span></div>
               </div>
               <p class="settings-note security-warning">Панель использует HTTP Basic Auth. Не публикуйте её порт напрямую в интернет.</p>
+              <div class="settings-title override-subtitle"><h2>Резервная копия настроек</h2><p>Параметры контейнера и профили подписок одним текстовым файлом</p></div>
+              <aside class="settings-callout warning-callout"><svg><use href="#i-alert"/></svg><div><b>В копии есть пароли</b><p>URL подписок, заголовки запросов и пароли локальных входов сохраняются как есть. Загруженные JSON в копию не входят: после восстановления подписки скачиваются заново. Восстановление заменяет все текущие профили, а запущено ли ядро, решает контейнер, а не копия.</p></div></aside>
+              <div class="settings-grid">
+                <div class="setting-row"><span><b>Скачать копию</b><small>Текстовый файл с текущими настройками</small></span><a class="secondary-button" id="download-backup" href="/cgi-bin/api?action=backup" download>Скачать</a></div>
+                <div class="setting-row"><span><b>Восстановить из копии</b><small>Заменит настройки контейнера и все подписки</small></span><span class="accent-controls"><input id="restore-file" type="file" accept=".txt,text/plain"><button class="secondary-button" type="button" id="restore-backup" disabled>Восстановить</button></span></div>
+              </div>
             </section>
           </form>
         </div>
@@ -317,7 +331,7 @@
   <div class="modal-layer hidden" id="runtime-json-modal">
     <section class="modal config-modal" role="dialog" aria-modal="true" aria-labelledby="runtime-json-title">
       <header class="modal-header"><div><h2 id="runtime-json-title">Конфигурация запуска</h2><p id="runtime-json-subtitle">Выбранный полный JSON с локальными входами RouterOS</p></div><button class="round-button" type="button" id="close-runtime-json" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
-      <div class="config-modal-body"><pre class="config-viewer json-viewer" id="runtime-json-viewer" role="textbox" aria-readonly="true" tabindex="0">Файл ещё не создан.</pre></div>
+      <div class="config-modal-body"><div class="runtime-sections" id="runtime-sections"></div><pre class="config-viewer json-viewer" id="runtime-json-viewer" role="textbox" aria-readonly="true" tabindex="0">Файл ещё не создан.</pre></div>
       <footer class="modal-actions"><button class="secondary-button" type="button" id="rebuild-runtime"><svg><use href="#i-refresh"/></svg>Применить заново</button><button class="secondary-button" type="button" id="copy-runtime-json"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-runtime-json">Готово</button></footer>
     </section>
   </div>

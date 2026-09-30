@@ -21,14 +21,20 @@
 - ✅ Atomic activation: a candidate replaces the running configuration only after `xray run -test` succeeds over the final `confdir`.
 - ♻️ An unchanged subscription leaves Xray running, so a scheduled refresh does not drop connections.
 - ↩️ Rollback to the last good source and runtime on transport, JSON, Xray, or install failures.
+- 🧯 A configuration that passes validation but crashes the core is rolled back to the previous working one after three consecutive failures, and a scheduled refresh will not reinstall it.
+- 🔁 Automatic failover to the fastest live configuration when the active one fails the HTTP check twice in a row.
+- 🧪 A Check button builds the configuration with the overrides currently in the form and hands it to the core, saving nothing and leaving interception alone.
+- 🧬 Overrides: your own `dns` section, your own `routing.rules` at either end of the list, and your own `outbounds` alongside the provider's.
 - 🔀 REDIR + TPROXY, pure TPROXY, and REDIR + TUN interception, selected according to RouterOS kernel support.
 - 🩺 Real HTTP health checks through the configuration's own outbounds, not a bare TCP connect.
 - 🌍 Geodata bootstrapped before the core starts, then refreshed by Xray's own scheduler.
 - 🧰 Inbounds carried by the subscription are stripped, while the container's own SOCKS and HTTP proxies are configured separately and start disabled.
 - 📝 Xray log level, error and access files, `dnsLog` and address masking — written to memory by default, not to the drive.
+- 🧾 The core's own log is available from the panel: the output of `xray run` is kept in memory, so reading it needs no access to the RouterOS log.
 - 🎨 Built-in WebUI on port `80` with colour themes, no Clash API and no external dashboard.
 - 🔐 HTTP Basic Auth with an in-app `BASIC_AUTH_HASH` generator; the default login is `admin` / `admin`.
 - 💾 Profiles persist under `/etc/xray`; generated configurations, jobs, events and geodata stay in `/dev/shm`.
+- 🗃 Settings and profiles back up to a single text file, restored from the panel.
 - 🌐 `amd64`, `arm64`, `armv7` and `armv5` images.
 
 ## 🚦 Lifecycle
@@ -103,7 +109,7 @@ The resulting runtime configuration and the provider's own JSON are available st
 
 ![Runtime configuration](/docs/screenshots/runtime-json.png)
 
-Settings are split into tabs: Headers, Inbound traffic, Alpine network, Xray core, Geodata, Appearance and Access. Appearance offers seven themes and a custom accent colour; the choice is stored in the container and applies to everyone opening the panel.
+Settings are split into tabs: Headers, Inbound traffic, Alpine network, Xray core, Overrides, Local inbounds, Geodata, Appearance and Access. Appearance offers seven themes and a custom accent colour; the choice is stored in the container and applies to everyone opening the panel.
 
 ![Settings - appearance](/docs/screenshots/settings-appearance.png)
 
@@ -166,6 +172,24 @@ Per-profile headers take precedence over the global ones. Editing headers or cle
 A scheduled refresh that returns the same subscription does not restart Xray. Before publishing a candidate the container compares it with the running version: the subscription fragment, the container's own fragments, the configuration set, the listener metadata, the source digest, and the geodata asset key. When all of them match, the candidate is discarded, `configuration unchanged` is written to the event log, and established connections survive.
 
 The comparison covers the whole subscription response, so a provider changing an item you have not selected still counts as a change and does restart the core.
+
+### When the core will not run
+
+`xray run -test` checks a configuration but opens no ports and contacts no servers, so a configuration can pass and still not work: a transport this RouterOS kernel lacks, a rejected certificate, a port already taken. Such a core used to be restarted forever, three seconds apart.
+
+An exit within thirty seconds of a start now counts as a consecutive failure. The pause grows: 3, 6, 12, 24, 48, 60 seconds. After the third one the container returns the previous version directory, which is why installing a new configuration no longer deletes the previous one. The fingerprint of the configuration that crashed is remembered, so a scheduled refresh will not install it again -- only Apply again will.
+
+A core that starts but never listens on the interception port is treated the same way: the configuration passed validation but cannot be used.
+
+A core the container stopped itself, because the interception rules would not apply, is not counted: the configuration is not at fault there, and rolling it back would fix nothing.
+
+The output of `xray run` is written to a size-capped file in `/dev/shm` and is available in the panel under Core log. The reason shown by the banner on the subscriptions page comes from it.
+
+### Automatic failover
+
+Off by default. When on, the container checks the active configuration on an interval with the same HTTP test the panel button runs. If it fails twice in a row, the fastest of the remaining live configurations is selected; if none answer, the container stays where it is and says so in the event log.
+
+Each check starts a separate core instance next to the running one, which is why the default interval is 300 seconds rather than tens.
 
 ## 🌍 Geodata
 
@@ -273,6 +297,12 @@ The Alpine network tab tunes the container's own sockets, meaning Xray's outboun
 ## 🛡 Security
 
 Subscription files contain credentials. Keep `/etc/xray` private, retain Basic Auth on untrusted networks, and use a unique long password. The container does not add or expose an Xray API itself; API and inbound sections supplied by the selected full JSON are retained, so control the subscription template.
+
+### Backups
+
+The Access tab hands out the container settings and every subscription profile as a single text file, and takes one back. Downloaded JSON is not included: after a restore the subscriptions are fetched again. URLs, request headers and local inbound passwords are in there verbatim, so keep the file where you keep other secrets.
+
+A restore replaces every current profile. Whether the core runs is decided by the container, not by the file: a restore neither drops a working gateway nor starts a stopped one.
 
 ## 🩻 Diagnostics
 

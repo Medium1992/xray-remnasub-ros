@@ -341,6 +341,18 @@
   }
 
   function showPage(pageName) {
+    // Форма настроек не перечитывается, пока в ней есть несохранённое, иначе
+    // опрос затирал бы набранное. Значит об этом надо сказать, а не молча
+    // показывать снимок на момент первого нажатия клавиши.
+    if (ui.page === "settings" && pageName !== "settings" && ui.settingsDirty &&
+        !confirm("В настройках есть несохранённые изменения.\n\nУйти и потерять их?")) {
+      return;
+    }
+    if (ui.page === "settings" && pageName !== "settings" && ui.settingsDirty) {
+      ui.settingsDirty = false;
+      settingsFingerprint = "";
+      renderSettings(true);
+    }
     ui.page = pageName;
     all("[data-page-link]").forEach((button) => button.classList.toggle("active", button.dataset.pageLink === pageName));
     all("[data-page]").forEach((page) => page.classList.toggle("active", page.dataset.page === pageName));
@@ -416,13 +428,6 @@
 
     renderCoreAlert();
 
-    const events = decode(model.events_b64);
-    const eventsViewer = $("runtime-events");
-    const wasAtBottom = eventsViewer.scrollHeight - eventsViewer.scrollTop - eventsViewer.clientHeight < 24;
-    const nextEvents = events || "Событий пока нет.";
-    if (eventsViewer.value !== nextEvents) eventsViewer.value = nextEvents;
-    if (wasAtBottom) eventsViewer.scrollTop = eventsViewer.scrollHeight;
-    $("runtime-events-state").textContent = events ? "Последние 100 событий" : "Событий пока нет";
     const active = profile;
     const result = !active ? "Нет профиля" : enabled(active.fail_closed) ? "Трафик заблокирован" : enabled(active.using_previous_config) ? "Предыдущая конфигурация" : active.config_present ? "Конфигурация принята" : "Конфигурация не создана";
     $("events-diagnostic-summary").innerHTML = `<span><small>Профиль</small><b>${escapeHtml(profileName(active))}</b></span><span><small>Этап</small><b>${escapeHtml(active?.refresh_stage || active?.status || "idle")}</b></span><span><small>HTTP / ответ</small><b>${active && Number(active.http_status) ? `HTTP ${escapeHtml(active.http_status)}${Number(active.response_bytes) ? ` · ${escapeHtml(formatBytes(active.response_bytes))}` : ""}` : "Нет данных"}</b></span><span><small>Результат</small><b>${escapeHtml(result)}</b></span>`;
@@ -455,6 +460,42 @@
     $("core-alert-title").textContent = CORE_STATE_TITLES[state];
     $("core-alert-text").textContent = parts.join(" ");
     $("core-alert-log").disabled = !model.core_log_present;
+  }
+
+  // Журнал событий грузится, только когда его окно открыто: он уезжал в каждый
+  // опрос статуса, то есть раз в три секунды, а окно почти всегда закрыто.
+  let eventsTimer;
+
+  async function loadEvents() {
+    const viewer = $("runtime-events");
+    try {
+      const response = await fetch("/cgi-bin/api?action=events");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const text = (await response.text()).trimEnd();
+      const atBottom = viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 24;
+      const next = text || "Событий пока нет.";
+      if (viewer.value !== next) viewer.value = next;
+      if (atBottom) viewer.scrollTop = viewer.scrollHeight;
+      $("runtime-events-state").textContent = text ? `${text.split("\n").length} последних событий` : "Событий пока нет";
+    } catch (error) {
+      viewer.value = `Ошибка загрузки: ${error.message}`;
+      $("runtime-events-state").textContent = "";
+    }
+  }
+
+  function openEvents() {
+    $("runtime-events-modal").classList.remove("hidden");
+    loadEvents();
+    clearInterval(eventsTimer);
+    eventsTimer = setInterval(() => {
+      if ($("runtime-events-modal").classList.contains("hidden") || document.hidden) return;
+      loadEvents();
+    }, 3000);
+  }
+
+  function closeEvents() {
+    clearInterval(eventsTimer);
+    closeModal("runtime-events-modal");
   }
 
   async function openCoreLog() {
@@ -604,6 +645,7 @@
       model.global_headers_b64, model.listener_mode, model.effective_listener_mode, model.firewall_backend, model.redir_port, model.tproxy_port,
       model.dns_override_enabled, model.dns_override,
       model.routing_rules_enabled, model.routing_rules_position, model.routing_rules,
+      model.extra_outbounds_enabled, model.extra_outbounds,
       model.inbound_strip_socks, model.inbound_strip_http,
       model.local_socks_enabled, model.local_socks_port, model.local_socks_user, model.local_socks_has_pass,
       model.local_http_enabled, model.local_http_port, model.local_http_user, model.local_http_has_pass,
@@ -617,6 +659,7 @@
       model.network_tcp_fin_timeout, model.network_tcp_congestion, model.network_tcp_buffer_max,
       model.tcp_congestion_available, model.sysctl,
       model.xray_probe_url, model.xray_probe_timeout_seconds, model.xray_probe_http_method,
+      model.failover_enabled, model.failover_interval_seconds,
       model.geodata_storage, model.geodata_asset_dir, model.geodata_asset_count,
       model.geodata_total_bytes, model.geodata_last_update, model.geodata_warning,
       model.ui_theme, model.ui_accent,
@@ -656,6 +699,10 @@
     all("[data-dns-override]").forEach((field) => field.classList.toggle("hidden", !$("dns-override-enabled").checked));
   }
 
+  function updateExtraOutboundsFields() {
+    all("[data-extra-outbounds]").forEach((field) => field.classList.toggle("hidden", !$("extra-outbounds-enabled").checked));
+  }
+
   function updateRoutingRulesFields() {
     all("[data-routing-rules]").forEach((field) => field.classList.toggle("hidden", !$("routing-rules-enabled").checked));
   }
@@ -663,6 +710,10 @@
   function updateLocalInboundFields() {
     all("[data-local-socks]").forEach((field) => field.classList.toggle("hidden", !$("local-socks-enabled").checked));
     all("[data-local-http]").forEach((field) => field.classList.toggle("hidden", !$("local-http-enabled").checked));
+  }
+
+  function updateFailoverFields() {
+    all("[data-failover]").forEach((field) => field.classList.toggle("hidden", !$("failover-enabled").checked));
   }
 
   function updateGeodataFields() {
@@ -759,8 +810,11 @@
     $("routing-rules-enabled").checked = enabled(model.routing_rules_enabled);
     $("routing-rules").value = model.routing_rules || "";
     all('input[name="routing-rules-position"]').forEach((input) => { input.checked = input.value === (model.routing_rules_position || "before"); });
+    $("extra-outbounds-enabled").checked = enabled(model.extra_outbounds_enabled);
+    $("extra-outbounds").value = model.extra_outbounds || "";
     updateDnsOverrideFields();
     updateRoutingRulesFields();
+    updateExtraOutboundsFields();
     $("inbound-strip-socks").checked = enabled(model.inbound_strip_socks ?? 1);
     $("inbound-strip-http").checked = enabled(model.inbound_strip_http ?? 1);
     $("local-socks-enabled").checked = enabled(model.local_socks_enabled);
@@ -786,6 +840,9 @@
     $("xray-probe-timeout-seconds").value = model.xray_probe_timeout_seconds || 5;
     const probeMethod = String(model.xray_probe_http_method || "HEAD").toUpperCase();
     $("xray-probe-http-method").value = probeMethod === "GET" ? "GET" : "HEAD";
+    $("failover-enabled").checked = enabled(model.failover_enabled);
+    $("failover-interval-seconds").value = model.failover_interval_seconds || 300;
+    updateFailoverFields();
     const geodataStorage = model.geodata_storage === "persistent" ? "persistent" : "memory";
     all('input[name="geodata-storage"]').forEach((input) => { input.checked = input.value === geodataStorage; });
     const timeoutDefaults = {
@@ -927,6 +984,45 @@
     viewer.innerHTML = highlightJson(text);
   }
 
+  // Что именно контейнер поменял в присланной конфигурации: панель в трёх местах
+  // обещает, что исходник не тронут, а показать это можно только сравнением.
+  const SECTION_LABELS = {
+    added: ["добавлено контейнером", "added"],
+    replaced: ["заменено контейнером", "replaced"],
+    kept: ["из подписки", "kept"],
+  };
+
+  function renderRuntimeSections(sourceText, runtimeText) {
+    const node = $("runtime-sections");
+    node.innerHTML = "";
+    let source;
+    let runtime;
+    try {
+      source = JSON.parse(sourceText);
+      runtime = JSON.parse(runtimeText);
+    } catch {
+      return;
+    }
+    // Исходник — массив конфигураций, рабочая — одна из них с наложениями.
+    const selected = Array.isArray(source)
+      ? source[Number(activeProfile()?.selected_config_index) || 0]
+      : source;
+    if (!selected || typeof runtime !== "object" || Array.isArray(runtime)) return;
+    const rows = Object.keys(runtime).sort().map((key) => {
+      const before = selected[key];
+      const after = runtime[key];
+      let state;
+      if (before === undefined) state = "added";
+      else if (JSON.stringify(before) === JSON.stringify(after)) state = "kept";
+      else state = "replaced";
+      const [label, className] = SECTION_LABELS[state];
+      return `<span class="runtime-section ${className}"><code>${escapeHtml(key)}</code>${escapeHtml(label)}</span>`;
+    });
+    const dropped = Object.keys(selected).filter((key) => runtime[key] === undefined).sort()
+      .map((key) => `<span class="runtime-section dropped"><code>${escapeHtml(key)}</code>убрано контейнером</span>`);
+    node.innerHTML = rows.concat(dropped).join("");
+  }
+
   async function openJsonModal(kind, profileId = model.active_profile_id) {
     const profile = profileById(profileId);
     if (!profile) return toast("Профиль не выбран", "error");
@@ -938,8 +1034,17 @@
     viewer.textContent = "Загрузка...";
     layer.dataset.profileId = profileId;
     layer.classList.remove("hidden");
+    $("runtime-sections").innerHTML = "";
     try {
-      showJson(viewer, await readProfileJson(kind, profileId));
+      const text = await readProfileJson(kind, profileId);
+      showJson(viewer, text);
+      if (!source) {
+        // Исходник берётся отдельным запросом: сравнивать надо с тем, что
+        // прислал провайдер, а не с тем, что уже собрано.
+        try {
+          renderRuntimeSections(await readProfileJson("source", profileId), text);
+        } catch { /* сравнение необязательно */ }
+      }
     } catch (error) {
       viewer.textContent = `Ошибка загрузки: ${error.message}`;
     }
@@ -967,11 +1072,14 @@
 
   function renderActionStates() {
     if (!model || !model.profiles) return;
+    $("settings-dirty").classList.toggle("hidden", !ui.settingsDirty);
     $("save-settings").disabled = ui.busy.has("settings");
     $("save-profile").disabled = ui.busy.has("profile-save");
     $("rebuild-runtime").disabled = ui.busy.has("rebuild");
     $("generate-basic-auth-hash").disabled = ui.busy.has("hash");
     $("check-overrides").disabled = ui.busy.has("check") || !model.active_profile_id;
+    $("geodata-refresh").disabled = ui.busy.has("geodata") || !model.active_profile_id;
+    $("restore-backup").disabled = ui.busy.has("restore") || !$("restore-file").files.length;
     $("add-profile").disabled = ui.busy.has("select");
   }
 
@@ -1239,6 +1347,9 @@ Xray перезапустится, соединения через роутер 
         routing_rules_present: "1",
         routing_rules: $("routing-rules").value,
         routing_rules_position: document.querySelector('input[name="routing-rules-position"]:checked')?.value || "before",
+        extra_outbounds_enabled: $("extra-outbounds-enabled").checked ? "1" : "0",
+        extra_outbounds_present: "1",
+        extra_outbounds: $("extra-outbounds").value,
         inbound_strip_socks: $("inbound-strip-socks").checked ? "1" : "0",
         inbound_strip_http: $("inbound-strip-http").checked ? "1" : "0",
         local_socks_enabled: $("local-socks-enabled").checked ? "1" : "0",
@@ -1279,6 +1390,8 @@ Xray перезапустится, соединения через роутер 
         xray_probe_url: $("xray-probe-url").value.trim(),
         xray_probe_timeout_seconds: $("xray-probe-timeout-seconds").value,
         xray_probe_http_method: $("xray-probe-http-method").value,
+        failover_enabled: $("failover-enabled").checked ? "1" : "0",
+        failover_interval_seconds: $("failover-interval-seconds").value,
         geodata_storage: document.querySelector('input[name="geodata-storage"]:checked')?.value || "memory",
         ui_theme: currentTheme(),
         ui_accent_present: "1",
@@ -1304,6 +1417,8 @@ Xray перезапустится, соединения через роутер 
       routing_rules_enabled: $("routing-rules-enabled").checked ? "1" : "0",
       routing_rules: $("routing-rules").value,
       routing_rules_position: document.querySelector('input[name="routing-rules-position"]:checked')?.value || "before",
+      extra_outbounds_enabled: $("extra-outbounds-enabled").checked ? "1" : "0",
+      extra_outbounds: $("extra-outbounds").value,
     });
     for (let attempt = 0; attempt < 150; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -1433,7 +1548,7 @@ Xray перезапустится, соединения через роутер 
   });
 
   $("open-active-runtime").addEventListener("click", () => openJsonModal("config"));
-  $("open-runtime-events").addEventListener("click", () => $("runtime-events-modal").classList.remove("hidden"));
+  $("open-runtime-events").addEventListener("click", openEvents);
   $("open-core-log").addEventListener("click", openCoreLog);
   $("core-alert-log").addEventListener("click", openCoreLog);
   $("close-core-log").addEventListener("click", () => closeModal("core-log-modal"));
@@ -1445,8 +1560,8 @@ Xray перезапустится, соединения через роутер 
   $("done-source-json").addEventListener("click", () => closeModal("source-json-modal"));
   $("close-runtime-json").addEventListener("click", () => closeModal("runtime-json-modal"));
   $("done-runtime-json").addEventListener("click", () => closeModal("runtime-json-modal"));
-  $("close-runtime-events").addEventListener("click", () => closeModal("runtime-events-modal"));
-  $("done-runtime-events").addEventListener("click", () => closeModal("runtime-events-modal"));
+  $("close-runtime-events").addEventListener("click", closeEvents);
+  $("done-runtime-events").addEventListener("click", closeEvents);
   $("delete-cancel").addEventListener("click", () => closeModal("delete-modal"));
   $("delete-confirm").addEventListener("click", confirmDelete);
 
@@ -1488,9 +1603,18 @@ Xray перезапустится, соединения через роутер 
     ui.settingsDirty = true;
   });
   $("check-overrides").addEventListener("click", () => perform("check", checkOverrides));
+  $("geodata-refresh").addEventListener("click", () => perform("geodata", async () => {
+    if (!model.active_profile_id) throw new Error("Сначала выберите подписку");
+    if (!confirmSwitch("Скачать файлы geodata заново?")) return;
+    await api("geodata-refresh", { profile_id: model.active_profile_id });
+    toast("Файлы geodata будут скачаны заново");
+    await refresh();
+  }));
+  $("failover-enabled").addEventListener("change", updateFailoverFields);
   $("xray-sniffing-enabled").addEventListener("change", updateSniffingFields);
   $("dns-override-enabled").addEventListener("change", updateDnsOverrideFields);
   $("routing-rules-enabled").addEventListener("change", updateRoutingRulesFields);
+  $("extra-outbounds-enabled").addEventListener("change", updateExtraOutboundsFields);
   $("local-socks-enabled").addEventListener("change", updateLocalInboundFields);
   $("local-http-enabled").addEventListener("change", updateLocalInboundFields);
   // Перерисовка из редактора, а не из модели, чтобы не потерять несохранённое.
@@ -1527,6 +1651,23 @@ Xray перезапустится, соединения через роутер 
     toast("Хеш создан");
   }));
   $("copy-basic-auth-hash").addEventListener("click", () => copyText($("basic-auth-hash").value, "Хеш скопирован"));
+
+  $("restore-file").addEventListener("change", () => {
+    $("restore-backup").disabled = !$("restore-file").files.length;
+  });
+  $("restore-backup").addEventListener("click", () => perform("restore", async () => {
+    const file = $("restore-file").files[0];
+    if (!file) throw new Error("Выберите файл копии");
+    if (file.size > 200000) throw new Error("Файл копии больше 200 КБ");
+    if (!confirm("Восстановить настройки из копии?\n\nТекущие подписки и параметры контейнера будут заменены.")) return;
+    const result = await api("restore", { backup: await file.text() });
+    $("restore-file").value = "";
+    $("restore-backup").disabled = true;
+    toast(`Восстановлено подписок: ${result.profiles}`);
+    settingsFingerprint = "";
+    ui.settingsDirty = false;
+    await refresh(true);
+  }));
 
 
   // Порядок открытия, а не порядок в разметке: иначе Esc закрывал не то окно,

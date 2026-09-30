@@ -550,6 +550,15 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   .events-diagnostic-summary > span:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
 }
 
+.runtime-sections { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.runtime-sections:empty { display: none; }
+.runtime-section { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: 10px; font-weight: 600; }
+.runtime-section code { color: var(--base-content); font: 700 10px/1.4 ui-monospace, Consolas, monospace; }
+.runtime-section.added { border-color: rgba(85, 185, 154, .34); color: var(--success); }
+.runtime-section.replaced { border-color: rgba(232, 169, 60, .34); color: var(--warning); }
+.runtime-section.dropped { border-color: rgba(232, 169, 60, .34); color: var(--warning); }
+.settings-dirty { align-self: center; margin-right: 4px; padding: 3px 10px; border-radius: 8px; color: var(--warning); background: rgba(232, 169, 60, .1); font-size: 11px; font-weight: 650; }
+.settings-dirty.hidden { display: none; }
 .check-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .check-title .secondary-button { min-height: 32px; font-size: 12px; white-space: nowrap; }
 .override-check-output { margin: 8px 0 0; padding: 9px 11px; max-height: 190px; overflow: auto; border-radius: 9px; background: rgba(var(--overlay-rgb), .05); font: 500 10px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }

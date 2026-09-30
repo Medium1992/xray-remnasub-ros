@@ -586,11 +586,15 @@ load_settings() {
     read -r XRAY_PROBE_TIMEOUT_SECONDS
     read -r XRAY_PROBE_HTTP_METHOD
     read -r GEODATA_STORAGE
+    read -r FAILOVER_ENABLED
+    read -r FAILOVER_INTERVAL_SECONDS
     read -r DNS_OVERRIDE_ENABLED
     read -r DNS_OVERRIDE_B64
     read -r ROUTING_RULES_ENABLED
     read -r ROUTING_RULES_POSITION
     read -r ROUTING_RULES_B64
+    read -r EXTRA_OUTBOUNDS_ENABLED
+    read -r EXTRA_OUTBOUNDS_B64
     read -r INBOUND_STRIP_SOCKS
     read -r INBOUND_STRIP_HTTP
     read -r LOCAL_SOCKS_ENABLED
@@ -615,8 +619,9 @@ $(state_load "$STATE" \
   NETWORK_TCP_FIN_TIMEOUT NETWORK_TCP_CONGESTION NETWORK_TCP_BUFFER_MAX \
   XRAY_SNIFFING_ENABLED XRAY_SNIFFING_ROUTE_ONLY \
   XRAY_PROBE_URL_B64 XRAY_PROBE_TIMEOUT_SECONDS XRAY_PROBE_HTTP_METHOD \
-  GEODATA_STORAGE DNS_OVERRIDE_ENABLED DNS_OVERRIDE_B64 \
+  GEODATA_STORAGE FAILOVER_ENABLED FAILOVER_INTERVAL_SECONDS DNS_OVERRIDE_ENABLED DNS_OVERRIDE_B64 \
   ROUTING_RULES_ENABLED ROUTING_RULES_POSITION ROUTING_RULES_B64 \
+  EXTRA_OUTBOUNDS_ENABLED EXTRA_OUTBOUNDS_B64 \
   INBOUND_STRIP_SOCKS INBOUND_STRIP_HTTP \
   LOCAL_SOCKS_ENABLED LOCAL_SOCKS_PORT LOCAL_SOCKS_USER_B64 LOCAL_SOCKS_PASS_B64 \
   LOCAL_HTTP_ENABLED LOCAL_HTTP_PORT LOCAL_HTTP_USER_B64 LOCAL_HTTP_PASS_B64 \
@@ -662,8 +667,12 @@ EOF
   valid_number "$XRAY_PROBE_TIMEOUT_SECONDS" && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -ge 1 ] && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -le 30 ] || XRAY_PROBE_TIMEOUT_SECONDS=5
   case "$XRAY_PROBE_HTTP_METHOD" in GET|HEAD) ;; *) XRAY_PROBE_HTTP_METHOD=HEAD ;; esac
   case "$GEODATA_STORAGE" in memory|persistent) ;; *) GEODATA_STORAGE=memory ;; esac
+  case "$FAILOVER_ENABLED" in 1) ;; *) FAILOVER_ENABLED=0 ;; esac
+  valid_number "$FAILOVER_INTERVAL_SECONDS" && [ "$FAILOVER_INTERVAL_SECONDS" -ge 60 ] &&
+    [ "$FAILOVER_INTERVAL_SECONDS" -le 86400 ] || FAILOVER_INTERVAL_SECONDS=300
   case "$DNS_OVERRIDE_ENABLED" in 1) ;; *) DNS_OVERRIDE_ENABLED=0 ;; esac
   case "$ROUTING_RULES_ENABLED" in 1) ;; *) ROUTING_RULES_ENABLED=0 ;; esac
+  case "$EXTRA_OUTBOUNDS_ENABLED" in 1) ;; *) EXTRA_OUTBOUNDS_ENABLED=0 ;; esac
   case "$ROUTING_RULES_POSITION" in before|after) ;; *) ROUTING_RULES_POSITION=before ;; esac
   # Локальные входы из подписки по умолчанию вырезаются: перехват здесь свой,
   # а чужой socks на неизвестном порту — это открытый прокси на роутере.
@@ -722,11 +731,15 @@ XRAY_PROBE_URL_B64=$XRAY_PROBE_URL_B64
 XRAY_PROBE_TIMEOUT_SECONDS=$XRAY_PROBE_TIMEOUT_SECONDS
 XRAY_PROBE_HTTP_METHOD=$XRAY_PROBE_HTTP_METHOD
 GEODATA_STORAGE=$GEODATA_STORAGE
+FAILOVER_ENABLED=$FAILOVER_ENABLED
+FAILOVER_INTERVAL_SECONDS=$FAILOVER_INTERVAL_SECONDS
 DNS_OVERRIDE_ENABLED=$DNS_OVERRIDE_ENABLED
 DNS_OVERRIDE_B64=$DNS_OVERRIDE_B64
 ROUTING_RULES_ENABLED=$ROUTING_RULES_ENABLED
 ROUTING_RULES_POSITION=$ROUTING_RULES_POSITION
 ROUTING_RULES_B64=$ROUTING_RULES_B64
+EXTRA_OUTBOUNDS_ENABLED=$EXTRA_OUTBOUNDS_ENABLED
+EXTRA_OUTBOUNDS_B64=$EXTRA_OUTBOUNDS_B64
 INBOUND_STRIP_SOCKS=$INBOUND_STRIP_SOCKS
 INBOUND_STRIP_HTTP=$INBOUND_STRIP_HTTP
 LOCAL_SOCKS_ENABLED=$LOCAL_SOCKS_ENABLED
@@ -822,6 +835,8 @@ build_xray_config() {
     ROUTING_RULES_ENABLED=${BUILD_OVERRIDE_RULES_ENABLED:-0}
     ROUTING_RULES_POSITION=${BUILD_OVERRIDE_RULES_POSITION:-before}
     ROUTING_RULES_B64=${BUILD_OVERRIDE_RULES_B64:-}
+    EXTRA_OUTBOUNDS_ENABLED=${BUILD_OVERRIDE_OUTBOUNDS_ENABLED:-0}
+    EXTRA_OUTBOUNDS_B64=${BUILD_OVERRIDE_OUTBOUNDS_B64:-}
   fi
   if ! build_listener_mode=$(LISTENER_MODE="$LISTENER_MODE" REDIR_PORT="$REDIR_PORT" TPROXY_PORT="$TPROXY_PORT" /scripts/network.sh resolve 2>/dev/null); then
     BUILD_ERROR='Could not resolve RouterOS listener mode'
@@ -1039,6 +1054,41 @@ build_xray_config() {
     build_event INFO "$build_id" "container routing rules added at the $ROUTING_RULES_POSITION of the list"
   fi
 
+  if [ "$EXTRA_OUTBOUNDS_ENABLED" = 1 ]; then
+    build_outbounds=$RUNTIME_DIR/$build_id.outbounds.$$.json
+    b64_decode "$EXTRA_OUTBOUNDS_B64" > "$build_outbounds"
+    if ! jq -e 'type == "array" and all(.[]; type == "object" and has("protocol") and (.tag | type) == "string")'          "$build_outbounds" >/dev/null 2>&1; then
+      rm -f "$build_outbounds"
+      BUILD_ERROR='Extra outbounds must be a JSON array of objects, each with a protocol and a tag'
+      discard_build_candidate
+      return 1
+    fi
+    # Теги должны быть свои: одноимённый outbound подписки был бы перекрыт
+    # молча, а правила маршрутизации поехали бы не туда.
+    build_outbound_clash=$(jq -r --slurpfile extra "$build_outbounds" '
+        [(.outbounds // [])[].tag] as $existing |
+        [$extra[0][].tag | select(. as $tag | $existing | index($tag))] | first // empty
+      ' "$BUILD_CANDIDATE_DIR/10-subscription.json" 2>/dev/null || true)
+    if [ -n "$build_outbound_clash" ]; then
+      rm -f "$build_outbounds"
+      BUILD_ERROR="The subscription already has an outbound tagged $build_outbound_clash"
+      discard_build_candidate
+      return 1
+    fi
+    build_outbounds_tmp=$RUNTIME_DIR/$build_id.outbounds-merged.$$.json
+    # В конец: Xray без routing отправляет трафик в первый outbound, и вставка
+    # своего в начало забрала бы себе всё.
+    if ! jq --slurpfile extra "$build_outbounds" '.outbounds = ((.outbounds // []) + $extra[0])'          "$BUILD_CANDIDATE_DIR/10-subscription.json" > "$build_outbounds_tmp" ||
+       ! mv "$build_outbounds_tmp" "$BUILD_CANDIDATE_DIR/10-subscription.json"; then
+      rm -f "$build_outbounds" "$build_outbounds_tmp"
+      BUILD_ERROR='Could not add the extra outbounds'
+      discard_build_candidate
+      return 1
+    fi
+    build_event INFO "$build_id" "container outbounds added: $(jq -r '[.[].tag] | join(", ")' "$build_outbounds" 2>/dev/null)"
+    rm -f "$build_outbounds"
+  fi
+
   if ! build_inbound_conflict=$(jq -r \
        --arg listener_mode "$build_listener_mode" \
        --argjson redir_port "$REDIR_PORT" \
@@ -1176,7 +1226,14 @@ build_xray_config() {
   build_geodata_log=$build_metadata/geodata.prepare.log
   build_status "$build_id" working 'Подготовка geodata' geodata
   build_event INFO "$build_id" 'preparing geodata assets'
-  if ! /scripts/geodata.sh prepare \
+  # Принудительное обновление запрашивается панелью один раз: маркер снимается
+  # тем же билдом, который его отработал.
+  build_geodata_force=0
+  if [ -f "$RUNTIME_DIR/$build_id.geodata-refresh" ] && [ "${BUILD_QUIET:-0}" != 1 ]; then
+    build_geodata_force=1
+    build_event INFO "$build_id" 'geodata will be downloaded again on request'
+  fi
+  if ! GEODATA_FORCE_REFRESH="$build_geodata_force" /scripts/geodata.sh prepare \
        "$BUILD_CANDIDATE_DIR/10-subscription.json" \
        "$BUILD_CANDIDATE_DIR/70-container-geodata-tail.json" \
        "$build_metadata/geodata.json" \
@@ -1187,6 +1244,7 @@ build_xray_config() {
     discard_build_candidate
     return 1
   fi
+  [ "$build_geodata_force" = 0 ] || rm -f "$RUNTIME_DIR/$build_id.geodata-refresh"
   build_event INFO "$build_id" "geodata ready in $(jq -r '.asset_dir // "?"' "$build_metadata/geodata.json" 2>/dev/null)"
   rm -f "$build_geodata_log"
   build_asset_dir=$(jq -r '.asset_dir // empty' "$build_metadata/geodata.json" 2>/dev/null || true)

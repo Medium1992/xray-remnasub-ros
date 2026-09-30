@@ -151,6 +151,20 @@
     return { className: "", label: "Не загружалась" };
   }
 
+  // Трафик и срок действия приходят в заголовке подписки. В карточке они
+  // полезнее, чем в модалке настроек профиля, куда за ними надо лезть.
+  function usageMeta(profile) {
+    const info = parseUserInfo(decode(profile.userinfo_b64));
+    const parts = [];
+    if (info.used !== null) {
+      parts.push(`<span>${icon("activity")}${escapeHtml(info.total
+        ? `${formatBytes(info.used)} из ${formatBytes(info.total)}`
+        : formatBytes(info.used))}</span>`);
+    }
+    if (info.expiry) parts.push(`<span>${icon("clock")}до ${escapeHtml(info.expiry.split(",")[0])}</span>`);
+    return parts.join("");
+  }
+
   function profileDiagnostic(profile) {
     const rows = [];
     const validation = decode(profile.validation_b64);
@@ -400,6 +414,8 @@
     $("network-firewall-backend").textContent = model.firewall_backend || "Не определён";
     $("network-active-interface").textContent = [model.active_interface, model.active_interface_cidr].filter(Boolean).join(" · ") || "Не найден";
 
+    renderCoreAlert();
+
     const events = decode(model.events_b64);
     const eventsViewer = $("runtime-events");
     const wasAtBottom = eventsViewer.scrollHeight - eventsViewer.scrollTop - eventsViewer.clientHeight < 24;
@@ -410,6 +426,57 @@
     const active = profile;
     const result = !active ? "Нет профиля" : enabled(active.fail_closed) ? "Трафик заблокирован" : enabled(active.using_previous_config) ? "Предыдущая конфигурация" : active.config_present ? "Конфигурация принята" : "Конфигурация не создана";
     $("events-diagnostic-summary").innerHTML = `<span><small>Профиль</small><b>${escapeHtml(profileName(active))}</b></span><span><small>Этап</small><b>${escapeHtml(active?.refresh_stage || active?.status || "idle")}</b></span><span><small>HTTP / ответ</small><b>${active && Number(active.http_status) ? `HTTP ${escapeHtml(active.http_status)}${Number(active.response_bytes) ? ` · ${escapeHtml(formatBytes(active.response_bytes))}` : ""}` : "Нет данных"}</b></span><span><small>Результат</small><b>${escapeHtml(result)}</b></span>`;
+  }
+
+  const CORE_STATE_TITLES = {
+    crashed: "Ядро Xray не запускается",
+    "rolled-back": "Возвращена предыдущая конфигурация",
+  };
+
+  function renderCoreAlert() {
+    const alert = $("core-alert");
+    const state = model.core_state;
+    const show = state === "crashed" || state === "rolled-back";
+    alert.classList.toggle("hidden", !show);
+    if (!show) return;
+    const reason = decode(model.core_reason_b64);
+    const fails = Number(model.core_fast_fails) || 0;
+    const retry = Number(model.core_retry_in) || 0;
+    const code = Number(model.core_exit_code);
+    const parts = [];
+    if (state === "crashed") {
+      parts.push(fails > 1 ? `Падений подряд: ${fails}.` : "Ядро завершилось сразу после запуска.");
+      if (Number.isFinite(code) && code >= 0) parts.push(`Код выхода ${code}.`);
+      if (retry > 0) parts.push(`Следующая попытка через ${retry} с.`);
+    } else {
+      parts.push("Новая конфигурация не поднимала ядро, поэтому вернулась предыдущая рабочая. Плановые обновления её больше не поставят — нажмите «Применить заново», чтобы повторить.");
+    }
+    if (reason) parts.push(reason);
+    $("core-alert-title").textContent = CORE_STATE_TITLES[state];
+    $("core-alert-text").textContent = parts.join(" ");
+    $("core-alert-log").disabled = !model.core_log_present;
+  }
+
+  async function openCoreLog() {
+    const layer = $("core-log-modal");
+    layer.classList.remove("hidden");
+    await loadCoreLog();
+  }
+
+  async function loadCoreLog() {
+    const viewer = $("core-log");
+    try {
+      const response = await fetch("/cgi-bin/api?action=core-log");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const text = (await response.text()).trimEnd();
+      const atBottom = viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 24;
+      viewer.value = text || "Журнал пуст.";
+      if (atBottom) viewer.scrollTop = viewer.scrollHeight;
+      $("core-log-state").textContent = text ? `${text.split("\n").length} строк` : "Журнал пуст";
+    } catch (error) {
+      viewer.value = `Ошибка загрузки: ${error.message}`;
+      $("core-log-state").textContent = "";
+    }
   }
 
   function renderSubscriptions() {
@@ -458,7 +525,7 @@
           <div class="subscription-details">
             <div class="subscription-title"><strong>${escapeHtml(profileName(profile))}</strong>${active ? "<mark>выбрана</mark>" : ""}</div>
             <p>${escapeHtml(profileUrl(profile) || "URL не задан")}</p>
-            <div class="subscription-meta"><span>${icon("clock")}<time>${escapeHtml(formatUpdated(profile.fetched_at))}</time></span><span>${icon("refresh")}авто: ${escapeHtml(formatInterval(profile.effective_refresh_seconds || profile.refresh_seconds))}</span><span>${icon("file")}${Number(profile.config_count) || 0} конфиг.</span></div>
+            <div class="subscription-meta"><span>${icon("clock")}<time>${escapeHtml(formatUpdated(profile.fetched_at))}</time></span><span>${icon("refresh")}авто: ${escapeHtml(formatInterval(profile.effective_refresh_seconds || profile.refresh_seconds))}</span><span>${icon("file")}${Number(profile.config_count) || 0} конфиг.</span>${usageMeta(profile)}</div>
           </div>
           <div class="subscription-actions">
             <span class="subscription-runtime-controls" aria-label="Управление Xray">
@@ -466,9 +533,10 @@
               <button class="icon-button runtime-stop" type="button" data-profile-action="stop" data-profile-id="${escapeHtml(profile.id)}" title="${active ? "Остановить Xray" : "Сначала выберите подписку"}"${active && model.run_enabled ? "" : " disabled"}>${icon("stop")}</button>
             </span>
             <button class="icon-button" type="button" data-profile-action="edit" data-profile-id="${escapeHtml(profile.id)}" title="Настройки">${icon("settings")}</button>
+            <button class="icon-button" type="button" data-profile-action="duplicate" data-profile-id="${escapeHtml(profile.id)}" title="Создать копию"${ui.busy.has("duplicate") ? " disabled" : ""}>${icon("copy")}</button>
             <button class="icon-button${working ? " loading" : ""}" type="button" data-profile-action="refresh" data-profile-id="${escapeHtml(profile.id)}" title="Обновить сейчас"${hasUrl && !working ? "" : " disabled"}>${icon("refresh")}</button>
             <button class="icon-button" type="button" data-profile-action="source" data-profile-id="${escapeHtml(profile.id)}" title="Полученный JSON">${icon("file")}</button>
-            <button class="icon-button danger" type="button" data-profile-action="delete" data-profile-id="${escapeHtml(profile.id)}" title="${active ? "Активную подписку удалить нельзя" : "Удалить"}"${active ? " disabled" : ""}>${icon("trash")}</button>
+            <button class="icon-button danger" type="button" data-profile-action="delete" data-profile-id="${escapeHtml(profile.id)}" title="${model.profiles.length < 2 ? "Единственную подписку удалить нельзя" : "Удалить"}"${model.profiles.length < 2 ? " disabled" : ""}>${icon("trash")}</button>
           </div>
         </div>
         ${active ? renderConfigRows(profile) : ""}
@@ -940,6 +1008,20 @@
     }
   }
 
+  function confirmSwitch(message) {
+    if (!model.running && !model.run_enabled) return true;
+    return confirm(`${message}
+
+Xray перезапустится, соединения через роутер оборвутся.`);
+  }
+
+  async function duplicateProfile(profileId) {
+    const result = await api("duplicate", { profile_id: profileId });
+    toast("Копия подписки создана");
+    await refresh();
+    openEditor(result.id);
+  }
+
   async function selectProfile(profileId) {
     if (!profileId || profileId === model.active_profile_id || ui.selectingProfileId) return;
     ui.selectingProfileId = profileId;
@@ -1120,7 +1202,9 @@
         use_provider_title: $("profile-use-provider-title").checked ? "1" : "0",
         use_provider_interval: $("profile-use-provider-interval").checked ? "1" : "0",
       });
-      if (profileId !== model.active_profile_id) await api("select", { profile_id: profileId });
+      // Новая подписка становится выбранной, потому что до неё выбирать было
+      // нечего. Правка существующей активную не меняет: это рвало бы трафик.
+      if (created) await api("select", { profile_id: profileId });
       ui.editorDirty = false;
       closeEditor(true);
       toast(created ? "Подписка добавлена" : "Профиль сохранён");
@@ -1208,9 +1292,12 @@
 
   function requestDelete(profileId) {
     const profile = profileById(profileId);
-    if (!profile || profileId === model.active_profile_id) return;
+    if (!profile || model.profiles.length < 2) return;
     ui.deleteProfileId = profileId;
-    $("delete-message").textContent = `Профиль «${profileName(profile)}», исходный JSON и рабочая конфигурация будут удалены.`;
+    const active = profileId === model.active_profile_id;
+    $("delete-message").textContent = active
+      ? `Профиль «${profileName(profile)}», исходный JSON и рабочая конфигурация будут удалены. Это выбранная подписка: контейнер переключится на другую и перезапустит Xray.`
+      : `Профиль «${profileName(profile)}», исходный JSON и рабочая конфигурация будут удалены.`;
     $("delete-modal").classList.remove("hidden");
   }
 
@@ -1264,6 +1351,8 @@
     if (configButton) {
       event.stopPropagation();
       if (configButton.disabled) return;
+      const target = model.configs.find((entry) => Number(entry.index) === Number(configButton.dataset.configIndex));
+      if (!confirmSwitch(`Переключиться на конфигурацию «${target?.name || configButton.dataset.configIndex}»?`)) return;
       perform("config", () => selectConfig(configButton.dataset.configIndex));
       return;
     }
@@ -1274,10 +1363,9 @@
       const id = actionButton.dataset.profileId;
       const action = actionButton.dataset.profileAction;
       if (action === "edit") {
-        perform("select", async () => {
-          if (id !== model.active_profile_id) await selectProfile(id);
-          openEditor(id);
-        });
+        openEditor(id);
+      } else if (action === "duplicate") {
+        perform("duplicate", () => duplicateProfile(id));
       } else if (action === "refresh") {
         perform("refresh", () => refreshProfile(id));
       } else if (action === "source") {
@@ -1290,11 +1378,21 @@
       return;
     }
     const selectButton = event.target.closest("[data-profile-select]");
-    if (selectButton && !selectButton.disabled) perform("select", () => selectProfile(selectButton.dataset.profileSelect));
+    if (selectButton && !selectButton.disabled) {
+      const target = profileById(selectButton.dataset.profileSelect);
+      if (!confirmSwitch(`Переключиться на подписку «${profileName(target)}»?`)) return;
+      perform("select", () => selectProfile(selectButton.dataset.profileSelect));
+    }
   });
 
   $("open-active-runtime").addEventListener("click", () => openJsonModal("config"));
   $("open-runtime-events").addEventListener("click", () => $("runtime-events-modal").classList.remove("hidden"));
+  $("open-core-log").addEventListener("click", openCoreLog);
+  $("core-alert-log").addEventListener("click", openCoreLog);
+  $("close-core-log").addEventListener("click", () => closeModal("core-log-modal"));
+  $("done-core-log").addEventListener("click", () => closeModal("core-log-modal"));
+  $("refresh-core-log").addEventListener("click", loadCoreLog);
+  $("copy-core-log").addEventListener("click", () => copyText($("core-log").value, "Журнал ядра скопирован"));
 
   $("close-source-json").addEventListener("click", () => closeModal("source-json-modal"));
   $("done-source-json").addEventListener("click", () => closeModal("source-json-modal"));
@@ -1383,6 +1481,21 @@
   $("copy-basic-auth-hash").addEventListener("click", () => copyText($("basic-auth-hash").value, "Хеш скопирован"));
 
 
+  // Порядок открытия, а не порядок в разметке: иначе Esc закрывал не то окно,
+  // которое человек видит сверху.
+  const modalStack = [];
+  const modalObserver = new MutationObserver((records) => {
+    records.forEach(({ target }) => {
+      const index = modalStack.indexOf(target.id);
+      if (target.classList.contains("hidden")) {
+        if (index >= 0) modalStack.splice(index, 1);
+      } else if (index < 0) {
+        modalStack.push(target.id);
+      }
+    });
+  });
+  all(".modal-layer").forEach((layer) => modalObserver.observe(layer, { attributeFilter: ["class"] }));
+
   all(".modal-layer").forEach((layer) => layer.addEventListener("mousedown", (event) => {
     if (event.target !== layer) return;
     if (layer.id === "profile-modal-layer") closeEditor();
@@ -1391,11 +1504,10 @@
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    const openLayers = all(".modal-layer:not(.hidden)");
-    const layer = openLayers.at(-1);
-    if (!layer) return;
-    if (layer.id === "profile-modal-layer") closeEditor();
-    else closeModal(layer.id);
+    const topmost = modalStack.at(-1) || all(".modal-layer:not(.hidden)").at(-1)?.id;
+    if (!topmost) return;
+    if (topmost === "profile-modal-layer") closeEditor();
+    else closeModal(topmost);
   });
 
   window.addEventListener("beforeunload", (event) => {

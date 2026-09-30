@@ -307,6 +307,22 @@ status_response() {
   fi
   tail -n 100 "$EVENT_LOG" > "$status_events" 2>/dev/null || : > "$status_events"
   running=false; xray_pid=$(cat "$RUNTIME_DIR/xray.pid" 2>/dev/null || true); valid_number "$xray_pid" && kill -0 "$xray_pid" 2>/dev/null && running=true
+  { read -r core_state
+    read -r core_profile_id
+    read -r core_exit_code
+    read -r core_fast_fails
+    read -r core_retry_in
+    read -r core_updated
+    read -r core_reason_b64
+  } <<EOF
+$(state_load "$CORE_STATUS" STATE PROFILE_ID EXIT_CODE FAST_FAILS RETRY_IN UPDATED REASON_B64)
+EOF
+  case "$core_state" in running|crashed|rolled-back|stopped) ;; *) core_state=stopped ;; esac
+  valid_number "$core_fast_fails" || core_fast_fails=0
+  valid_number "$core_retry_in" || core_retry_in=0
+  valid_number "$core_updated" || core_updated=0
+  valid_number "$core_exit_code" || core_exit_code=-1
+  core_log_present=false; [ ! -s "$CORE_LOG" ] || core_log_present=true
   # Версия ядра и backend определяются один раз при старте контейнера.
   backend=$(cat "$RUNTIME_DIR/firewall.backend" 2>/dev/null || true)
   case "$backend" in nftables|iptables) ;; *) backend=iptables ;; esac
@@ -409,12 +425,15 @@ EOF
     --arg xray_probe_url "$xray_probe_url" --argjson xray_probe_timeout_seconds "$XRAY_PROBE_TIMEOUT_SECONDS" --arg xray_probe_http_method "$XRAY_PROBE_HTTP_METHOD" \
     --arg geodata_storage "$GEODATA_STORAGE" --arg geodata_asset_dir "$geodata_asset_dir" --argjson geodata_asset_count "$geodata_asset_count" \
     --argjson geodata_total_bytes "$geodata_total_bytes" --argjson geodata_last_update "$geodata_last_update" --arg geodata_warning "$geodata_warning" \
+    --arg core_state "$core_state" --argjson core_exit_code "$core_exit_code" --argjson core_fast_fails "$core_fast_fails" \
+    --argjson core_retry_in "$core_retry_in" --argjson core_updated_at "$core_updated" --arg core_reason_b64 "$core_reason_b64" \
+    --argjson core_log_present "$core_log_present" \
     --arg backend "$backend" --arg active_interface "$active_interface" --arg active_interface_cidr "$active_interface_cidr" --arg effective_listener_mode "$effective_listener_mode" --arg version "$xray_version" \
     --argjson dns_override_enabled "$DNS_OVERRIDE_ENABLED" --arg dns_override "$(b64_decode "$DNS_OVERRIDE_B64")" \
     --argjson routing_rules_enabled "$ROUTING_RULES_ENABLED" --arg routing_rules_position "$ROUTING_RULES_POSITION" \
     --arg routing_rules "$(b64_decode "$ROUTING_RULES_B64")" \
     --arg ui_theme "$UI_THEME" --arg ui_accent "$UI_ACCENT" \
-    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,network_tcp_notsent_lowat:$network_tcp_notsent_lowat,network_tcp_slow_start_after_idle:$network_tcp_slow_start_after_idle,network_tcp_mtu_probing:$network_tcp_mtu_probing,network_tcp_fin_timeout:$network_tcp_fin_timeout,network_tcp_congestion:$network_tcp_congestion,network_tcp_buffer_max:$network_tcp_buffer_max,tcp_congestion_available:$tcp_congestion_available,sysctl:{notsent_lowat:$sysctl_notsent_lowat,slow_start_after_idle:$sysctl_slow_start_after_idle,mtu_probing:$sysctl_mtu_probing,fin_timeout:$sysctl_fin_timeout,congestion:$sysctl_congestion,buffer_rmem:$sysctl_buffer_rmem,buffer_wmem:$sysctl_buffer_wmem},xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,inbound_strip_socks:$inbound_strip_socks,dns_override_enabled:$dns_override_enabled,dns_override:$dns_override,routing_rules_enabled:$routing_rules_enabled,routing_rules_position:$routing_rules_position,routing_rules:$routing_rules,inbound_strip_http:$inbound_strip_http,local_socks_enabled:$local_socks_enabled,local_socks_port:$local_socks_port,local_socks_user:$local_socks_user,local_socks_has_pass:$local_socks_has_pass,local_http_enabled:$local_http_enabled,local_http_port:$local_http_port,local_http_user:$local_http_user,local_http_has_pass:$local_http_has_pass,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
+    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,network_tcp_notsent_lowat:$network_tcp_notsent_lowat,network_tcp_slow_start_after_idle:$network_tcp_slow_start_after_idle,network_tcp_mtu_probing:$network_tcp_mtu_probing,network_tcp_fin_timeout:$network_tcp_fin_timeout,network_tcp_congestion:$network_tcp_congestion,network_tcp_buffer_max:$network_tcp_buffer_max,tcp_congestion_available:$tcp_congestion_available,sysctl:{notsent_lowat:$sysctl_notsent_lowat,slow_start_after_idle:$sysctl_slow_start_after_idle,mtu_probing:$sysctl_mtu_probing,fin_timeout:$sysctl_fin_timeout,congestion:$sysctl_congestion,buffer_rmem:$sysctl_buffer_rmem,buffer_wmem:$sysctl_buffer_wmem},xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,inbound_strip_socks:$inbound_strip_socks,dns_override_enabled:$dns_override_enabled,dns_override:$dns_override,routing_rules_enabled:$routing_rules_enabled,routing_rules_position:$routing_rules_position,routing_rules:$routing_rules,inbound_strip_http:$inbound_strip_http,local_socks_enabled:$local_socks_enabled,local_socks_port:$local_socks_port,local_socks_user:$local_socks_user,local_socks_has_pass:$local_socks_has_pass,local_http_enabled:$local_http_enabled,local_http_port:$local_http_port,local_http_user:$local_http_user,local_http_has_pass:$local_http_has_pass,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,core_state:$core_state,core_exit_code:$core_exit_code,core_fast_fails:$core_fast_fails,core_retry_in:$core_retry_in,core_updated_at:$core_updated_at,core_reason_b64:$core_reason_b64,core_log_present:$core_log_present,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version,events_b64:($events | @base64)}'
   status_result=$?
   rm -f "$status_profiles" "$status_events"
   rm -f "$status_configs"
@@ -425,6 +444,11 @@ EOF
 action=$(url_decode "$(query_value action)")
 case "${REQUEST_METHOD:-GET}:$action" in
   GET:status|'GET:') status_response; exit 0 ;;
+  GET:core-log)
+    printf 'Content-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
+    tail -n 400 "$CORE_LOG" 2>/dev/null || true
+    exit 0
+    ;;
   GET:source|GET:config)
     id=$(url_decode "$(query_value profile_id)"); valid_profile_id "$id" || reply_error 'Invalid profile'
     [ "$action" = source ] && file=$(profile_source "$id") || file=$(profile_runtime "$id")
@@ -456,6 +480,37 @@ INSECURE_TLS=0
 USE_PROVIDER_TITLE=1
 USE_PROVIDER_INTERVAL=1
 EOF
+    atomic_replace "$profile_tmp" "$PROFILES_DIR/$id.conf" || reply_error 'Could not create profile'
+    chmod 600 "$PROFILES_DIR/$id.conf" 2>/dev/null || true
+    state_unlock
+    json_headers; jq -n --arg id "$id" '{ok:true,id:$id}'
+    ;;
+  duplicate)
+    source_id=$(form_value profile_id); source_profile=$(profile_path "$source_id") || reply_error 'Invalid profile'
+    [ -f "$source_profile" ] || reply_error 'Profile not found'
+    state_lock || reply_error 'Could not lock container state'
+    id=p-$(date +%s); suffix=0
+    while [ -e "$PROFILES_DIR/$id.conf" ]; do suffix=$((suffix+1)); id=p-$(date +%s)-$suffix; done
+    # Копируются только настройки запроса. Загруженный JSON, рантайм и статусы
+    # остаются у исходной подписки: копия начинает с чистого листа.
+    duplicate_name=$(b64_decode "$(state_get "$source_profile" NAME_B64)")
+    profile_tmp=$RUNTIME_DIR/$id.profile.$$
+    if ! { printf 'PROFILE_VERSION=1\n'
+           printf 'NAME_B64=%s\n' "$(b64_encode "${duplicate_name:-Новая подписка} (копия)")"
+           printf 'URL_B64=%s\n' "$(state_get "$source_profile" URL_B64)"
+           printf 'HEADERS_B64=%s\n' "$(state_get "$source_profile" HEADERS_B64)"
+           printf 'USE_PROFILE_HEADERS=%s\n' "$(state_get "$source_profile" USE_PROFILE_HEADERS 1)"
+           printf 'SELECTED_INDEX=0\n'
+           printf 'SELECTED_FINGERPRINT=\n'
+           printf 'REFRESH_SECONDS=%s\n' "$(state_get "$source_profile" REFRESH_SECONDS 3600)"
+           printf 'TIMEOUT_SECONDS=%s\n' "$(state_get "$source_profile" TIMEOUT_SECONDS 30)"
+           printf 'INSECURE_TLS=%s\n' "$(state_get "$source_profile" INSECURE_TLS 0)"
+           printf 'USE_PROVIDER_TITLE=%s\n' "$(state_get "$source_profile" USE_PROVIDER_TITLE 1)"
+           printf 'USE_PROVIDER_INTERVAL=%s\n' "$(state_get "$source_profile" USE_PROVIDER_INTERVAL 1)"
+         } > "$profile_tmp"; then
+      rm -f "$profile_tmp"
+      reply_error 'Could not copy the profile'
+    fi
     atomic_replace "$profile_tmp" "$PROFILES_DIR/$id.conf" || reply_error 'Could not create profile'
     chmod 600 "$PROFILES_DIR/$id.conf" 2>/dev/null || true
     state_unlock
@@ -524,6 +579,9 @@ EOF
     else
       [ -s "$(profile_source "$id")" ] || reply_error 'Download the subscription first'
       job=build
+      # Пересборку просит человек, а не расписание: если ядро на этой
+      # конфигурации уже падало, он вправе попробовать снова.
+      forget_failed_runtime "$id"
     fi
     queue_job "$id" "$job" || reply_error 'Could not queue job'
     json_headers; printf '{"ok":true}\n'
@@ -994,8 +1052,28 @@ EOF
     ;;
   delete)
     id=$(form_value profile_id); state_lock || reply_error 'Could not lock container state'
-    load_settings; [ "$id" != "$ACTIVE_PROFILE_ID" ] || reply_error 'Active profile cannot be deleted'
+    load_settings
     valid_profile_id "$id" || reply_error 'Invalid profile'
+    # Выбранную подписку удалить можно, если есть на что переключиться: раньше
+    # запрет распространялся и на случай, когда подписка всего одна, и тогда
+    # кнопка не работала вообще никогда.
+    if [ "$id" = "$ACTIVE_PROFILE_ID" ]; then
+      delete_successor=
+      for delete_candidate in "$PROFILES_DIR"/p-*.conf; do
+        [ -f "$delete_candidate" ] || continue
+        delete_candidate_id=${delete_candidate##*/}; delete_candidate_id=${delete_candidate_id%.conf}
+        [ "$delete_candidate_id" != "$id" ] || continue
+        delete_successor=$delete_candidate_id
+        break
+      done
+      [ -n "$delete_successor" ] ||
+        reply_error 'The only subscription cannot be deleted; change its URL or add another one first'
+      ACTIVE_PROFILE_ID=$delete_successor
+      write_state || reply_error 'Could not switch the active profile'
+      RUN_ENABLED_AFTER_DELETE=$RUN_ENABLED
+    else
+      RUN_ENABLED_AFTER_DELETE=0
+    fi
     lock_job "$id-selection" || reply_error 'Could not lock profile configuration'
     if ! clear_profile_runtime "$id"; then
       unlock_job "$id-selection"
@@ -1003,8 +1081,20 @@ EOF
     fi
     rm -f "$PROFILES_DIR/$id.conf" "$(profile_source "$id")" "$(profile_meta "$id")" "$STATUS_DIR/$id.conf" "$STATUS_DIR/$id.version" "$ERRORS_DIR/$id.txt" "$JOBS_DIR/$id.job" "$RUNTIME_DIR/$id.validation.log" "$(profile_active_pointer "$id")"
     rmdir "$(profile_versions_dir "$id")" 2>/dev/null || true
+    rm -f "$(profile_previous_pointer "$id")" "$STATUS_DIR/$id.probes.json"
+    forget_failed_runtime "$id"
     unlock_job "$id-selection"
     state_unlock
+    if [ "$RUN_ENABLED_AFTER_DELETE" = 1 ]; then
+      successor_runtime=$(profile_runtime_dir "$ACTIVE_PROFILE_ID" 2>/dev/null || true)
+      if [ -n "$successor_runtime" ] && [ -d "$successor_runtime" ]; then
+        kill -HUP 1 2>/dev/null || true
+      elif [ -s "$(profile_source "$ACTIVE_PROFILE_ID")" ]; then
+        queue_job "$ACTIVE_PROFILE_ID" build || true
+      else
+        queue_job "$ACTIVE_PROFILE_ID" fetch || true
+      fi
+    fi
     json_headers; printf '{"ok":true}\n'
     ;;
   start|stop)

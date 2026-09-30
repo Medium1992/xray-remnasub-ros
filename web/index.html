@@ -60,12 +60,13 @@
           <div><h1>Подписки</h1><p id="subscriptions-subtitle">0 профилей</p></div>
           <div class="control-actions">
             <button class="secondary-button runtime-header-button" type="button" id="open-active-runtime" disabled title="Конфигурация запуска Xray"><svg><use href="#i-file"/></svg><span>Конфигурация запуска</span></button>
-            <button class="secondary-button runtime-header-button" type="button" id="open-runtime-events" title="События контейнера"><svg><use href="#i-terminal"/></svg><span>События</span></button>
+            <button class="secondary-button runtime-header-button" type="button" id="open-core-log" title="Журнал ядра Xray"><svg><use href="#i-file"/></svg><span>Журнал ядра</span></button><button class="secondary-button runtime-header-button" type="button" id="open-runtime-events" title="События контейнера"><svg><use href="#i-terminal"/></svg><span>События</span></button>
             <button class="primary-button" type="button" id="add-profile"><svg><use href="#i-plus"/></svg><span>Добавить</span></button>
           </div>
         </header>
         <div class="page-scroll">
           <div class="content subscriptions-content">
+            <aside class="core-alert hidden" id="core-alert"><svg><use href="#i-alert"/></svg><div><b id="core-alert-title">Ядро не запускается</b><p id="core-alert-text"></p></div><button class="secondary-button" type="button" id="core-alert-log">Журнал ядра</button></aside>
             <div class="subscription-list" id="subscription-list"></div>
             <section class="empty-state hidden" id="subscription-empty">
               <span><svg><use href="#i-layers"/></svg></span>
@@ -310,6 +311,14 @@
       <header class="modal-header"><div><h2 id="runtime-events-title">События контейнера</h2><p>Загрузка подписок, проверка JSON и запуск Xray · журнал хранится только в RAM</p></div><button class="round-button" type="button" id="close-runtime-events" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
       <div class="config-modal-body events-modal-body"><div class="events-diagnostic-summary" id="events-diagnostic-summary"></div><textarea class="config-viewer" id="runtime-events" readonly spellcheck="false">Событий пока нет.</textarea></div>
       <footer class="modal-actions"><span class="modal-footer-state" id="runtime-events-state">Событий пока нет</span><button class="secondary-button" type="button" id="copy-runtime-events"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-runtime-events">Готово</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-layer hidden" id="core-log-modal">
+    <section class="modal config-modal" role="dialog" aria-modal="true" aria-labelledby="core-log-title">
+      <header class="modal-header"><div><h2 id="core-log-title">Журнал ядра Xray</h2><p>Вывод процесса <code>xray run</code> · хранится только в RAM, последние 400 строк</p></div><button class="round-button" type="button" id="close-core-log" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
+      <div class="config-modal-body"><textarea class="config-viewer" id="core-log" readonly spellcheck="false">Журнал пуст.</textarea></div>
+      <footer class="modal-actions"><span class="modal-footer-state" id="core-log-state"></span><button class="secondary-button" type="button" id="refresh-core-log"><svg><use href="#i-refresh"/></svg>Обновить</button><button class="secondary-button" type="button" id="copy-core-log"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-core-log">Готово</button></footer>
     </section>
   </div>
 

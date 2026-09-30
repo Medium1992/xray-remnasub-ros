@@ -668,6 +668,104 @@ allow_probe() {
   event_log INFO system 'ICMP gateway probe restored: Xray is running'
 }
 
+# Лог ядра держим отдельно от журнала контейнера: xray пишет в свой stderr, а
+# из RouterOS его не прочитать. Вывод дублируется в stdout, чтобы журнал
+# контейнера не обеднел, и в файл с ограничением по размеру.
+CORE_LOG_PID=
+start_xray_core() {
+  start_core_runtime=$1 start_core_assets=$2
+  if [ -f "$CORE_LOG" ]; then
+    core_log_size=$(wc -c < "$CORE_LOG" 2>/dev/null || printf 0)
+    valid_number "$core_log_size" || core_log_size=0
+    [ "$core_log_size" -le 262144 ] || mv -f "$CORE_LOG" "$CORE_LOG.1"
+  fi
+  printf '===== %s · %s · %s =====\n' \
+    "$(date +'%Y-%m-%d %H:%M:%S')" "$ACTIVE_PROFILE_ID" "$(xray version 2>/dev/null | head -n1)" >> "$CORE_LOG"
+  CORE_LOG_PID=
+  rm -f "$CORE_FIFO"
+  if mkfifo "$CORE_FIFO" 2>/dev/null; then
+    awk -v f="$CORE_LOG" '{
+      print; fflush()
+      print >> f; fflush(f)
+      if (++n >= 1500) { close(f); system("mv -f \"" f "\" \"" f ".1\""); n = 0 }
+    }' < "$CORE_FIFO" &
+    CORE_LOG_PID=$!
+    XRAY_LOCATION_ASSET="$start_core_assets" xray run -confdir "$start_core_runtime" > "$CORE_FIFO" 2>&1 &
+  else
+    XRAY_LOCATION_ASSET="$start_core_assets" xray run -confdir "$start_core_runtime" &
+  fi
+  XRAY_PID=$!
+}
+
+# Причина падения — последняя значимая строка текущего запуска.
+core_exit_reason() {
+  awk '
+    /^===== / { line = "" ; next }
+    /\[Error\]|^panic:|^fatal error:|Failed to / { line = $0 }
+    END {
+      if (line == "") exit
+      sub(/^[0-9\/]+ [0-9:.]+ /, "", line)
+      print substr(line, 1, 400)
+    }
+  ' "$CORE_LOG" 2>/dev/null
+}
+
+# Состояние ядра для панели: она иначе видит только «не запущен» и не может
+# отличить остановку от падения по кругу.
+write_core_status() {
+  core_status_tmp=$CORE_STATUS.$$
+  {
+    printf 'STATE=%s\n' "$1"
+    printf 'PROFILE_ID=%s\n' "${2:-}"
+    printf 'EXIT_CODE=%s\n' "${3:-}"
+    printf 'FAST_FAILS=%s\n' "${4:-0}"
+    printf 'RETRY_IN=%s\n' "${5:-0}"
+    printf 'UPDATED=%s\n' "$(date +%s)"
+    printf 'REASON_B64=%s\n' "$(b64_encode "${6:-}")"
+  } > "$core_status_tmp" && mv "$core_status_tmp" "$CORE_STATUS" || rm -f "$core_status_tmp"
+}
+
+# Новая конфигурация прошла `xray -test`, но ядро с ней не живёт: возвращаем
+# предыдущий каталог версии, а отпечаток упавшей запоминаем, чтобы плановое
+# обновление не поставило её снова.
+rollback_runtime_version() {
+  rollback_reason=$1
+  rollback_pointer=$(profile_active_pointer "$ACTIVE_PROFILE_ID") || return 1
+  rollback_previous_pointer=$(profile_previous_pointer "$ACTIVE_PROFILE_ID") || return 1
+  rollback_versions=$(profile_versions_dir "$ACTIVE_PROFILE_ID") || return 1
+  rollback_previous=$(cat "$rollback_previous_pointer" 2>/dev/null || true)
+  case "$rollback_previous" in ''|NONE|*[!0-9A-Za-z._-]*) return 1 ;; esac
+  [ -d "$rollback_versions/$rollback_previous" ] || return 1
+  rollback_current=$(cat "$rollback_pointer" 2>/dev/null || true)
+  [ "$rollback_current" != "$rollback_previous" ] || return 1
+  rollback_lock=$ACTIVE_PROFILE_ID-selection
+  lock_job "$rollback_lock" || return 1
+  if [ -d "$rollback_versions/$rollback_current" ]; then
+    rollback_fingerprint=$(candidate_fingerprint "$rollback_versions/$rollback_current" 2>/dev/null || true)
+    rollback_failed_file=$(failed_runtime_file "$ACTIVE_PROFILE_ID") || rollback_failed_file=
+    if [ -n "$rollback_fingerprint" ] && [ -n "$rollback_failed_file" ]; then
+      printf '%s\n' "$rollback_fingerprint" > "$rollback_failed_file.tmp.$$" &&
+        mv "$rollback_failed_file.tmp.$$" "$rollback_failed_file" || rm -f "$rollback_failed_file.tmp.$$"
+    fi
+  fi
+  if ! printf '%s\n' "$rollback_previous" > "$rollback_pointer.tmp.$$" ||
+     ! mv "$rollback_pointer.tmp.$$" "$rollback_pointer"; then
+    rm -f "$rollback_pointer.tmp.$$"
+    unlock_job "$rollback_lock"
+    return 1
+  fi
+  rm -f "$rollback_previous_pointer"
+  rollback_version_file=$STATUS_DIR/$ACTIVE_PROFILE_ID.version
+  rollback_version=$(cat "$rollback_version_file" 2>/dev/null || printf 0)
+  valid_number "$rollback_version" || rollback_version=0
+  printf '%s\n' "$((rollback_version + 1))" > "$rollback_version_file" 2>/dev/null || true
+  unlock_job "$rollback_lock"
+  rollback_message='Xray does not run with the new configuration; the previous working one is back'
+  printf '%s\n' "$rollback_message${rollback_reason:+: $rollback_reason}" > "$ERRORS_DIR/$ACTIVE_PROFILE_ID.txt" 2>/dev/null || true
+  event_log ERROR "$ACTIVE_PROFILE_ID" "$rollback_message${rollback_reason:+: $rollback_reason}"
+  return 0
+}
+
 # Причина ожидания пишется один раз при смене: цикл идёт пять раз в секунду.
 SUPERVISOR_HOLD_REASON=
 supervisor_hold() {
@@ -681,6 +779,8 @@ supervisor_release() {
 }
 
 supervisor() {
+  CORE_FAST_FAILS=0
+  CORE_PROFILE=
   while [ "$STOPPING" = 0 ]; do
     RESTART_REQUESTED=0
     load_settings
@@ -690,9 +790,17 @@ supervisor() {
       LISTENER_BLOCKED_SIGNATURE=
       cleanup_routing
       block_probe || true
+      if [ "$CORE_PROFILE" != stopped ]; then
+        write_core_status stopped
+        CORE_PROFILE=stopped
+        CORE_FAST_FAILS=0
+      fi
       sleep 1
       continue
     fi
+    # Счётчик падений принадлежит профилю: после переключения он ни о чём.
+    [ "$CORE_PROFILE" = "$ACTIVE_PROFILE_ID" ] || CORE_FAST_FAILS=0
+    CORE_PROFILE=$ACTIVE_PROFILE_ID
     runtime_state=$(state_get "$STATUS_DIR/$ACTIVE_PROFILE_ID.conf" STATE idle)
     if [ -f "$JOBS_DIR/$ACTIVE_PROFILE_ID.job" ] || [ "$runtime_state" = queued ] || [ "$runtime_state" = working ]; then
       supervisor_hold "a configuration job is still running (state=$runtime_state)"
@@ -851,8 +959,8 @@ supervisor() {
       continue
     fi
     event_log INFO "$ACTIVE_PROFILE_ID" "starting $(xray version 2>/dev/null | head -n1)"
-    XRAY_LOCATION_ASSET="$runtime_asset_dir" xray run -confdir "$runtime" &
-    XRAY_PID=$!
+    start_xray_core "$runtime" "$runtime_asset_dir"
+    core_started=$(date +%s)
     printf '%s\n' "$XRAY_PID" > "$RUNTIME_DIR/xray.pid"
     if [ "$STOPPING" = 1 ] || [ "$RESTART_REQUESTED" = 1 ]; then
       terminate_xray "$XRAY_PID"
@@ -881,14 +989,32 @@ supervisor() {
       sleep 0.1
     done
     if [ "$xray_ready" != 1 ]; then
-      event_log ERROR "$ACTIVE_PROFILE_ID" "Xray did not start listening on port $xray_ready_port"
+      ready_reason=$(core_exit_reason)
+      event_log ERROR "$ACTIVE_PROFILE_ID" \
+        "Xray did not start listening on port $xray_ready_port${ready_reason:+: $ready_reason}"
       kill -0 "$XRAY_PID" 2>/dev/null && terminate_xray "$XRAY_PID"
       wait "$XRAY_PID" || true
       XRAY_PID=
       rm -f "$RUNTIME_DIR/xray.pid"
+      [ -z "$CORE_LOG_PID" ] || wait "$CORE_LOG_PID" 2>/dev/null || true
+      CORE_LOG_PID=
       release_geodata_lease || event_log ERROR "$ACTIVE_PROFILE_ID" 'could not release geodata assets'
       [ "$STOPPING" = 0 ] || break
-      [ "$RESTART_REQUESTED" = 1 ] || sleep 3
+      if [ "$RESTART_REQUESTED" = 1 ]; then
+        CORE_FAST_FAILS=0
+        continue
+      fi
+      # Ядро, не открывшее перехватывающий вход, ничем не лучше упавшего:
+      # конфигурация прошла проверку, но работать с ней нельзя.
+      CORE_FAST_FAILS=$((CORE_FAST_FAILS + 1))
+      if [ "$CORE_FAST_FAILS" -ge 3 ] && rollback_runtime_version "$ready_reason"; then
+        CORE_FAST_FAILS=0
+        write_core_status rolled-back "$ACTIVE_PROFILE_ID" '' 0 0 "$ready_reason"
+        continue
+      fi
+      write_core_status crashed "$ACTIVE_PROFILE_ID" '' "$CORE_FAST_FAILS" 3 \
+        "${ready_reason:-did not start listening on port $xray_ready_port}"
+      sleep 3
       continue
     fi
     if [ "$STOPPING" = 1 ] || [ "$RESTART_REQUESTED" = 1 ]; then
@@ -917,18 +1043,55 @@ supervisor() {
         block_probe || true
         terminate_xray "$XRAY_PID"
       else
+        write_core_status running "$ACTIVE_PROFILE_ID" '' "$CORE_FAST_FAILS"
         allow_probe || true
       fi
     fi
+    # wait прерывается пойманным сигналом раньше, чем ядро завершится, и
+    # следующий запуск упёрся бы в ещё занятые порты прошлого.
     wait "$XRAY_PID"
     rc=$?
+    while kill -0 "$XRAY_PID" 2>/dev/null; do
+      wait "$XRAY_PID"
+      rc=$?
+    done
     XRAY_PID=
     rm -f "$RUNTIME_DIR/xray.pid"
+    [ -z "$CORE_LOG_PID" ] || wait "$CORE_LOG_PID" 2>/dev/null || true
+    CORE_LOG_PID=
     release_geodata_lease || event_log ERROR "$ACTIVE_PROFILE_ID" 'could not release geodata assets'
     cleanup_routing
     block_probe || true
     [ "$STOPPING" = 1 ] && break
-    [ "$RESTART_REQUESTED" = 1 ] || { event_log ERROR "$ACTIVE_PROFILE_ID" "Xray exited with code $rc"; sleep 3; }
+    if [ "$RESTART_REQUESTED" = 1 ]; then
+      CORE_FAST_FAILS=0
+      continue
+    fi
+    # Падением подряд считается выход раньше тридцати секунд: ядро, прожившее
+    # дольше, с конфигурацией совместимо, и виновата не она.
+    core_runtime_seconds=$(( $(date +%s) - core_started ))
+    if [ "$core_runtime_seconds" -lt 30 ]; then
+      CORE_FAST_FAILS=$((CORE_FAST_FAILS + 1))
+    else
+      CORE_FAST_FAILS=1
+    fi
+    core_reason=$(core_exit_reason)
+    event_log ERROR "$ACTIVE_PROFILE_ID" "Xray exited with code $rc${core_reason:+: $core_reason}"
+    if [ "$CORE_FAST_FAILS" -ge 3 ] && rollback_runtime_version "$core_reason"; then
+      CORE_FAST_FAILS=0
+      write_core_status rolled-back "$ACTIVE_PROFILE_ID" "$rc" 0 0 "$core_reason"
+      continue
+    fi
+    # Повторы реже с каждым быстрым падением подряд: 3, 6, 12, 24, 48, 60.
+    core_delay=3
+    core_step=1
+    while [ "$core_step" -lt "$CORE_FAST_FAILS" ] && [ "$core_delay" -lt 60 ]; do
+      core_delay=$((core_delay * 2))
+      core_step=$((core_step + 1))
+    done
+    [ "$core_delay" -le 60 ] || core_delay=60
+    write_core_status crashed "$ACTIVE_PROFILE_ID" "$rc" "$CORE_FAST_FAILS" "$core_delay" "$core_reason"
+    sleep "$core_delay"
   done
 }
 
@@ -942,9 +1105,12 @@ block_probe || true
 # Версия ядра и доступность nftables в рантайме не меняются — считаем один раз,
 # а не на каждый опрос статуса.
 xray version 2>/dev/null | head -n1 > "$RUNTIME_DIR/xray.version" || : > "$RUNTIME_DIR/xray.version"
-# Backend по модулю ядра. В образе arm64 и amd64 только nftables; iptables
-# докачивается, если ядро без nf_tables. На armv7 и armv5 он уже в образе.
-if ! lsmod 2>/dev/null | grep -q nf_tables; then
+# Backend спрашиваем у network.sh: проверка там одна на весь контейнер, и она
+# видит nf_tables, вкомпилированный в ядро без отдельного модуля. Своя проверка
+# по lsmod отвечала иначе, из-за чего контейнер зря доставлял iptables, а панель
+# показывала backend, которым перехват на самом деле не пользовался.
+# В образе arm64 и amd64 только nftables; на armv7 и armv5 iptables уже внутри.
+if [ "$(/scripts/network.sh backend 2>/dev/null || printf iptables)" != nftables ]; then
   if command -v apk >/dev/null 2>&1 && ! apk info -e iptables iptables-legacy >/dev/null 2>&1; then
     echo 'kernel has no nf_tables, installing iptables'
     if apk add --no-cache iptables iptables-legacy >/dev/null 2>&1; then

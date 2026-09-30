@@ -244,6 +244,9 @@ apply_redir_tun_iptables() {
 }
 
 case "$action" in
+  # Один ответ на вопрос «есть ли nftables» для всего контейнера: entrypoint
+  # спрашивает здесь, а не заводит вторую проверку, которая разойдётся с этой.
+  backend) if nft_available; then echo nftables; else echo iptables; fi; exit 0 ;;
   resolve) resolve_mode; exit $? ;;
   cleanup) route_cleanup; exit 0 ;;
   probe-block) probe_block; exit $? ;;

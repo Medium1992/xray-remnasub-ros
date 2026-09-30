@@ -9,6 +9,9 @@ JOBS_DIR=$RUNTIME_DIR/jobs
 STATUS_DIR=$RUNTIME_DIR/status
 ERRORS_DIR=$RUNTIME_DIR/errors
 EVENT_LOG=$RUNTIME_DIR/events.log
+CORE_LOG=$RUNTIME_DIR/xray-core.log
+CORE_FIFO=$RUNTIME_DIR/xray-core.fifo
+CORE_STATUS=$RUNTIME_DIR/core.status
 NETWORK_INFO_FILE=$RUNTIME_DIR/network.info
 NETWORK_SYSCTL_ORIGINAL_FILE=$RUNTIME_DIR/sysctl.original
 
@@ -150,6 +153,7 @@ profile_source() { printf '%s/%s.source.json' "$PROFILES_DIR" "$1"; }
 profile_meta() { printf '%s/%s.meta' "$PROFILES_DIR" "$1"; }
 profile_active_pointer() { valid_profile_id "$1" && printf '%s/%s.active' "$RUNTIME_DIR" "$1"; }
 profile_versions_dir() { valid_profile_id "$1" && printf '%s/%s.versions' "$RUNTIME_DIR" "$1"; }
+profile_previous_pointer() { valid_profile_id "$1" && printf '%s/%s.previous' "$RUNTIME_DIR" "$1"; }
 profile_runtime_dir() {
   runtime_id=$1
   runtime_pointer=$(profile_active_pointer "$runtime_id") || return 1
@@ -179,6 +183,8 @@ clear_profile_runtime() {
   clear_id=$1
   clear_pointer=$(profile_active_pointer "$clear_id") || return 1
   clear_versions=$(profile_versions_dir "$clear_id") || return 1
+  clear_previous=$(profile_previous_pointer "$clear_id") && rm -f "$clear_previous"
+  forget_failed_runtime "$clear_id"
   clear_pointer_tmp=$clear_pointer.tmp.$$
   printf 'NONE\n' > "$clear_pointer_tmp" || return 1
   chmod 600 "$clear_pointer_tmp" 2>/dev/null || true
@@ -337,6 +343,26 @@ runtime_matches_candidate() {
   [ -n "$matches_new" ] && [ "$matches_new" = "$matches_old" ]
 }
 
+# Отпечаток собранного каталога по тем же файлам, что сравнивает
+# runtime_matches_candidate. Нужен, чтобы узнать конфигурацию, на которой ядро
+# уже падало, и не ставить её снова каждым плановым обновлением.
+candidate_fingerprint() {
+  fingerprint_dir=$1
+  for fingerprint_file in \
+    10-subscription.json 70-container-geodata-tail.json 80-container-log.json 90-container-inbounds.json \
+    .metadata/configs.json .metadata/listener.json .metadata/source.sha256 .metadata/geodata.json; do
+    [ -f "$fingerprint_dir/$fingerprint_file" ] || return 1
+    cat "$fingerprint_dir/$fingerprint_file" || return 1
+  done | sha256sum | cut -d' ' -f1
+}
+
+failed_runtime_file() { valid_profile_id "$1" && printf '%s/%s.failed' "$STATUS_DIR" "$1"; }
+
+forget_failed_runtime() {
+  forget_failed=$(failed_runtime_file "$1") || return 0
+  rm -f "$forget_failed"
+}
+
 install_build_candidates_locked() {
   install_id=$1
   install_profile=$(profile_path "$install_id") || { BUILD_ERROR='Profile disappeared during installation'; return 1; }
@@ -377,6 +403,22 @@ install_build_candidates_locked() {
       return 3
     fi
   fi
+  if [ "${BUILD_EMPTY:-0}" != 1 ] && [ "${BUILD_FORCED:-0}" != 1 ]; then
+    install_failed_file=$(failed_runtime_file "$install_id") || install_failed_file=
+    if [ -n "$install_failed_file" ] && [ -s "$install_failed_file" ]; then
+      install_candidate_fingerprint=$(candidate_fingerprint "$BUILD_CANDIDATE_DIR" 2>/dev/null || true)
+      if [ -n "$install_candidate_fingerprint" ] &&
+         [ "$install_candidate_fingerprint" = "$(cat "$install_failed_file" 2>/dev/null || true)" ]; then
+        discard_build_candidate
+        BUILD_ERROR='This configuration already crashed Xray; apply it again by hand to retry'
+        return 1
+      fi
+    fi
+  fi
+  # Предыдущая версия каталога остаётся жить: на неё откатывается supervisor,
+  # если ядро с новой не поднимается.
+  install_previous_version=$(cat "$install_pointer" 2>/dev/null || true)
+  case "$install_previous_version" in ''|NONE|*[!0-9A-Za-z._-]*) install_previous_version= ;; esac
   if [ -f "$install_version_file" ]; then
     cp "$install_version_file" "$install_version_previous" || { BUILD_ERROR='Could not stage current runtime version'; return 1; }
     install_had_version=1
@@ -472,9 +514,22 @@ install_build_candidates_locked() {
     return 1
   fi
   rm -f "$install_profile_previous" "$install_version_previous"
+  install_previous_pointer=$(profile_previous_pointer "$install_id") || install_previous_pointer=
+  if [ -n "$install_previous_pointer" ]; then
+    if [ -n "$install_target" ] && [ -n "$install_previous_version" ] &&
+       [ -d "$install_versions/$install_previous_version" ]; then
+      printf '%s\n' "$install_previous_version" > "$install_previous_pointer.tmp.$$" &&
+        mv "$install_previous_pointer.tmp.$$" "$install_previous_pointer" ||
+        rm -f "$install_previous_pointer.tmp.$$"
+    else
+      rm -f "$install_previous_pointer"
+    fi
+  fi
   for install_old in "$install_versions"/v-*; do
     [ -d "$install_old" ] || continue
-    [ -n "$install_target" ] && [ "$install_old" = "$install_target" ] || rm -rf "$install_old" 2>/dev/null || true
+    [ -n "$install_target" ] && [ "$install_old" = "$install_target" ] && continue
+    [ -n "$install_previous_version" ] && [ "$install_old" = "$install_versions/$install_previous_version" ] && continue
+    rm -rf "$install_old" 2>/dev/null || true
   done
   return 0
 }

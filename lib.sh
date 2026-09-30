@@ -9,13 +9,14 @@ JOBS_DIR=$RUNTIME_DIR/jobs
 STATUS_DIR=$RUNTIME_DIR/status
 ERRORS_DIR=$RUNTIME_DIR/errors
 EVENT_LOG=$RUNTIME_DIR/events.log
+CHECKS_DIR=$RUNTIME_DIR/checks
 CORE_LOG=$RUNTIME_DIR/xray-core.log
 CORE_FIFO=$RUNTIME_DIR/xray-core.fifo
 CORE_STATUS=$RUNTIME_DIR/core.status
 NETWORK_INFO_FILE=$RUNTIME_DIR/network.info
 NETWORK_SYSCTL_ORIGINAL_FILE=$RUNTIME_DIR/sysctl.original
 
-mkdir -p "$PROFILES_DIR" "$JOBS_DIR" "$STATUS_DIR" "$ERRORS_DIR"
+mkdir -p "$PROFILES_DIR" "$JOBS_DIR" "$STATUS_DIR" "$ERRORS_DIR" "$CHECKS_DIR"
 
 valid_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; }
 # Значение sysctl: число в диапазоне либо слово system. Остальное заменяется
@@ -770,6 +771,12 @@ apply_kernel_settings() {
     /scripts/network-alpine.sh
 }
 
+# Проверка оверрайдов идёт тем же конвейером, что и рабочая сборка, но её
+# прогресс не должен попадать в статус профиля: supervisor снимает перехват,
+# пока по профилю числится работа.
+build_status() { [ "${BUILD_QUIET:-0}" = 1 ] || set_status "$@"; }
+build_event() { [ "${BUILD_QUIET:-0}" = 1 ] || event_log "$@"; }
+
 build_xray_config() {
   build_id=$1
   discard_build_candidate
@@ -807,6 +814,15 @@ build_xray_config() {
   fi
 
   load_settings
+  # Проверка оверрайдов собирает конфигурацию с ещё не сохранёнными значениями,
+  # а load_settings выше вернул бы сохранённые.
+  if [ "${BUILD_OVERRIDE_ACTIVE:-0}" = 1 ]; then
+    DNS_OVERRIDE_ENABLED=${BUILD_OVERRIDE_DNS_ENABLED:-0}
+    DNS_OVERRIDE_B64=${BUILD_OVERRIDE_DNS_B64:-}
+    ROUTING_RULES_ENABLED=${BUILD_OVERRIDE_RULES_ENABLED:-0}
+    ROUTING_RULES_POSITION=${BUILD_OVERRIDE_RULES_POSITION:-before}
+    ROUTING_RULES_B64=${BUILD_OVERRIDE_RULES_B64:-}
+  fi
   if ! build_listener_mode=$(LISTENER_MODE="$LISTENER_MODE" REDIR_PORT="$REDIR_PORT" TPROXY_PORT="$TPROXY_PORT" /scripts/network.sh resolve 2>/dev/null); then
     BUILD_ERROR='Could not resolve RouterOS listener mode'
     return 1
@@ -968,7 +984,7 @@ build_xray_config() {
       discard_build_candidate
       return 1
     fi
-    event_log INFO "$build_id" "removed source inbounds: $build_stripped_inbounds"
+    build_event INFO "$build_id" "removed source inbounds: $build_stripped_inbounds"
   fi
 
   # Замена секции целиком, а не слияние: dns.servers — массив. Подстановка в
@@ -992,7 +1008,7 @@ build_xray_config() {
       return 1
     fi
     rm -f "$build_dns_override"
-    event_log INFO "$build_id" 'DNS section replaced by the container override'
+    build_event INFO "$build_id" 'DNS section replaced by the container override'
   fi
 
   # Свои правила маршрутизации вставляются в массив подписки. Отдельным файлом
@@ -1020,7 +1036,7 @@ build_xray_config() {
       return 1
     fi
     rm -f "$build_rules"
-    event_log INFO "$build_id" "container routing rules added at the $ROUTING_RULES_POSITION of the list"
+    build_event INFO "$build_id" "container routing rules added at the $ROUTING_RULES_POSITION of the list"
   fi
 
   if ! build_inbound_conflict=$(jq -r \
@@ -1154,12 +1170,12 @@ build_xray_config() {
       discard_build_candidate
       return 1
     fi
-    event_log INFO "$build_id" 'nothing references geoip or geosite; the geodata section was dropped'
+    build_event INFO "$build_id" 'nothing references geoip or geosite; the geodata section was dropped'
   fi
 
   build_geodata_log=$build_metadata/geodata.prepare.log
-  set_status "$build_id" working 'Подготовка geodata' geodata
-  event_log INFO "$build_id" 'preparing geodata assets'
+  build_status "$build_id" working 'Подготовка geodata' geodata
+  build_event INFO "$build_id" 'preparing geodata assets'
   if ! /scripts/geodata.sh prepare \
        "$BUILD_CANDIDATE_DIR/10-subscription.json" \
        "$BUILD_CANDIDATE_DIR/70-container-geodata-tail.json" \
@@ -1171,7 +1187,7 @@ build_xray_config() {
     discard_build_candidate
     return 1
   fi
-  event_log INFO "$build_id" "geodata ready in $(jq -r '.asset_dir // "?"' "$build_metadata/geodata.json" 2>/dev/null)"
+  build_event INFO "$build_id" "geodata ready in $(jq -r '.asset_dir // "?"' "$build_metadata/geodata.json" 2>/dev/null)"
   rm -f "$build_geodata_log"
   build_asset_dir=$(jq -r '.asset_dir // empty' "$build_metadata/geodata.json" 2>/dev/null || true)
   case "$GEODATA_STORAGE:$build_asset_dir" in
@@ -1246,10 +1262,22 @@ build_xray_config() {
   chmod 700 "$BUILD_CANDIDATE_DIR" "$build_metadata" 2>/dev/null || true
   chmod 600 "$BUILD_CANDIDATE_DIR/10-subscription.json" "$BUILD_CANDIDATE_DIR/70-container-geodata-tail.json" "$BUILD_CANDIDATE_DIR/80-container-log.json" "$BUILD_CANDIDATE_DIR/90-container-inbounds.json" "$build_metadata/configs.json" "$build_metadata/geodata.json" "$build_metadata/listener.json" "$build_metadata/source.sha256" 2>/dev/null || true
 
-  set_status "$build_id" working 'Проверка конфигурации' validation
-  event_log INFO "$build_id" 'validating the assembled configuration with xray run -test'
+  build_status "$build_id" working 'Проверка конфигурации' validation
+  build_event INFO "$build_id" 'validating the assembled configuration with xray run -test'
   if ! XRAY_LOCATION_ASSET="$build_asset_dir" xray run -test -confdir "$BUILD_CANDIDATE_DIR" > "$build_validation" 2>&1; then
-    BUILD_ERROR=$(tail -n 20 "$build_validation" | tr '\n' ' ' | head -c 4096)
+    # Отказ ядра — это одна строка, а не весь вывод: первые строки заняты
+    # баннером версии, и в сообщении для панели от них никакой пользы.
+    BUILD_ERROR=$(awk '
+      /Failed to |^panic:|^fatal error:|\[Error\]/ {
+        line = $0
+        sub(/^[0-9\/]+ [0-9:.]+ /, "", line)
+        print substr(line, 1, 1000)
+        found = 1
+        exit
+      }
+      END { if (!found) exit 1 }
+    ' "$build_validation" 2>/dev/null) ||
+      BUILD_ERROR=$(tail -n 5 "$build_validation" | tr '\n' ' ' | head -c 1000)
     [ -n "$BUILD_ERROR" ] || BUILD_ERROR='Xray rejected the selected configuration'
     discard_build_candidate
     return 1

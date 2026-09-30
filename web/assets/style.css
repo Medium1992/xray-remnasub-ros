@@ -550,6 +550,12 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   .events-diagnostic-summary > span:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
 }
 
+.check-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.check-title .secondary-button { min-height: 32px; font-size: 12px; white-space: nowrap; }
+.override-check-output { margin: 8px 0 0; padding: 9px 11px; max-height: 190px; overflow: auto; border-radius: 9px; background: rgba(var(--overlay-rgb), .05); font: 500 10px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+.override-check-output.hidden { display: none; }
+@media (max-width: 620px) { .check-title { align-items: flex-start; flex-direction: column; } }
+
 .core-alert { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 12px; margin-bottom: 14px; padding: 13px 16px; border: 1px solid var(--warn-border); border-radius: 12px; color: var(--warn-content); background: var(--warn-bg); }
 .core-alert > svg { width: 20px; height: 20px; color: var(--warning); }
 .core-alert b { color: var(--warn-heading); font-size: 12px; }

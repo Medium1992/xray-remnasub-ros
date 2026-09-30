@@ -316,6 +316,61 @@ EOF
   FETCH_ERROR=
 }
 
+# Проверка оверрайдов без сохранения: та же сборка и тот же `xray -test`, что и
+# для рабочей конфигурации, но результат никуда не устанавливается. Очередь своя,
+# не профильная: работа, числящаяся за профилем, заставила бы supervisor снять
+# правила перехвата на время проверки.
+process_checks() {
+  while :; do
+    for request in "$CHECKS_DIR"/c-*.request; do
+      [ -f "$request" ] || continue
+      token=${request##*/}; token=${token%.request}
+      check_id=$(state_get "$request" PROFILE_ID)
+      result=$CHECKS_DIR/$token.result
+      if ! valid_profile_id "$check_id" || [ ! -f "$(profile_path "$check_id" 2>/dev/null)" ]; then
+        printf 'STATE=error\nMESSAGE_B64=%s\n' "$(b64_encode 'Подписка не найдена')" > "$result"
+        rm -f "$request"
+        continue
+      fi
+      printf 'STATE=running\n' > "$result"
+      (
+        BUILD_OVERRIDE_ACTIVE=1
+        BUILD_OVERRIDE_DNS_ENABLED=$(state_get "$request" DNS_OVERRIDE_ENABLED 0)
+        BUILD_OVERRIDE_DNS_B64=$(state_get "$request" DNS_OVERRIDE_B64)
+        BUILD_OVERRIDE_RULES_ENABLED=$(state_get "$request" ROUTING_RULES_ENABLED 0)
+        BUILD_OVERRIDE_RULES_POSITION=$(state_get "$request" ROUTING_RULES_POSITION before)
+        BUILD_OVERRIDE_RULES_B64=$(state_get "$request" ROUTING_RULES_B64)
+        BUILD_QUIET=1
+        BUILD_DEFER_INSTALL=1
+        export BUILD_QUIET BUILD_DEFER_INSTALL BUILD_OVERRIDE_ACTIVE           BUILD_OVERRIDE_DNS_ENABLED BUILD_OVERRIDE_DNS_B64           BUILD_OVERRIDE_RULES_ENABLED BUILD_OVERRIDE_RULES_POSITION BUILD_OVERRIDE_RULES_B64
+        if build_xray_config "$check_id"; then
+          check_message='Конфигурация собрана и принята ядром'
+          check_state=ok
+        else
+          check_message=${BUILD_ERROR:-'Ядро отклонило конфигурацию'}
+          check_state=error
+        fi
+        discard_build_candidate
+        printf 'STATE=%s\nMESSAGE_B64=%s\nVALIDATION_B64=%s\nAT=%s\n' \
+          "$check_state" "$(b64_encode "$check_message")" \
+          "$(b64_encode "$(tail -c 4096 "$RUNTIME_DIR/$check_id.validation.log" 2>/dev/null || true)")" \
+          "$(date +%s)" > "$result.tmp" && mv "$result.tmp" "$result" || rm -f "$result.tmp"
+      )
+      rm -f "$request"
+    done
+    # Результаты живут в RAM и нужны только до опроса панелью: всё, чему больше
+    # десяти минут, убираем, чтобы каталог не рос.
+    checks_now=$(date +%s)
+    for stale in "$CHECKS_DIR"/c-*.result; do
+      [ -f "$stale" ] || continue
+      stale_at=$(file_mtime "$stale" 2>/dev/null || printf 0)
+      valid_number "$stale_at" || stale_at=0
+      [ $((checks_now - stale_at)) -gt 600 ] && rm -f "$stale"
+    done
+    sleep 1
+  done
+}
+
 process_jobs() {
   while :; do
     for job in "$JOBS_DIR"/p-*.job; do
@@ -1028,12 +1083,14 @@ supervisor() {
     fi
     supervisor_release
     event_log INFO system "applying $runtime_listener_mode interception rules"
+    core_killed_by_rules=0
     if ! LISTENER_MODE="$runtime_listener_mode" LISTENER_MODE_STRICT=1 REDIR_PORT="$runtime_redir_port" TPROXY_PORT="$runtime_tproxy_port" /scripts/network.sh apply > "$RUNTIME_DIR/network.log" 2>&1; then
       # Вывод apply уходит в отдельный файл, и раньше отказ ядра оставался
       # только там — в журнале роутера было пусто. Тащим его сюда целиком.
       network_error=$(tail -n 20 "$RUNTIME_DIR/network.log" 2>/dev/null | tr '\r\n' '  ' | head -c 2048)
       event_log ERROR system "network rules failed: ${network_error:-unknown error}"
       LISTENER_MODE="$LISTENER_MODE" REDIR_PORT="$REDIR_PORT" TPROXY_PORT="$TPROXY_PORT" /scripts/network.sh cleanup >/dev/null 2>&1 || true
+      core_killed_by_rules=1
       terminate_xray "$XRAY_PID"
     else
       ROUTING_ACTIVE=1
@@ -1070,12 +1127,21 @@ supervisor() {
     # Падением подряд считается выход раньше тридцати секунд: ядро, прожившее
     # дольше, с конфигурацией совместимо, и виновата не она.
     core_runtime_seconds=$(( $(date +%s) - core_started ))
+    core_reason=$(core_exit_reason)
+    if [ "$core_killed_by_rules" = 1 ]; then
+      # Ядро остановил сам контейнер, потому что не встали правила перехвата.
+      # Конфигурация тут ни при чём, и откатывать её значило бы лечить не то.
+      core_reason=${core_reason:-interception rules could not be applied}
+      event_log ERROR "$ACTIVE_PROFILE_ID" "Xray stopped because interception rules failed"
+      write_core_status crashed "$ACTIVE_PROFILE_ID" "$rc" 0 5 "$core_reason"
+      sleep 5
+      continue
+    fi
     if [ "$core_runtime_seconds" -lt 30 ]; then
       CORE_FAST_FAILS=$((CORE_FAST_FAILS + 1))
     else
       CORE_FAST_FAILS=1
     fi
-    core_reason=$(core_exit_reason)
     event_log ERROR "$ACTIVE_PROFILE_ID" "Xray exited with code $rc${core_reason:+: $core_reason}"
     if [ "$CORE_FAST_FAILS" -ge 3 ] && rollback_runtime_version "$core_reason"; then
       CORE_FAST_FAILS=0
@@ -1181,6 +1247,11 @@ start_refresh_worker() {
   REFRESH_PID=$!
 }
 
+start_process_checks() {
+  process_checks &
+  CHECKS_PID=$!
+}
+
 # Сторож httpd и воркеров. Живёт в подшелле, куда STOPPING не доходит, поэтому
 # цикл бесконечный: с завершением PID 1 его снимет ядро.
 watchdog() {
@@ -1198,6 +1269,10 @@ watchdog() {
       event_log ERROR system 'refresh worker stopped; restarting it'
       start_refresh_worker
     fi
+    if ! kill -0 "$CHECKS_PID" 2>/dev/null; then
+      event_log ERROR system 'override check worker stopped; restarting it'
+      start_process_checks
+    fi
   done
 }
 
@@ -1205,6 +1280,7 @@ start_httpd
 event_log INFO system 'Web UI started on port 80'
 start_process_jobs
 start_refresh_worker
+start_process_checks
 watchdog &
 supervisor
 stop

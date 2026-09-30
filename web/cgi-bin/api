@@ -146,7 +146,10 @@ require_post() {
   else reply_error 'Same-origin POST required'
   fi
   length=${CONTENT_LENGTH:-0}; valid_number "$length" || reply_error 'Invalid request length'
-  [ "$length" -le 65536 ] || reply_error 'Request is too large'
+  # Оверрайды ограничены 16 КиБ каждый, а percent-encoding раздувает JSON втрое:
+  # тела должно хватать на оба плюс остальную форму, иначе заявленный предел поля
+  # недостижим и человек получает отказ по размеру запроса вместо по полю.
+  [ "$length" -le 262144 ] || reply_error 'Request is too large'
   # head -c читает ровно столько байт, сколько обещал Content-Length, одним
   # заходом. dd bs=1 делал на то же самое до 65536 отдельных read().
   FORM_BODY=$(head -c "$length" 2>/dev/null)
@@ -444,6 +447,23 @@ EOF
 action=$(url_decode "$(query_value action)")
 case "${REQUEST_METHOD:-GET}:$action" in
   GET:status|'GET:') status_response; exit 0 ;;
+  GET:check-result)
+    token=$(url_decode "$(query_value token)")
+    case "$token" in c-[0-9]*) ;; *) reply_error 'Invalid check token' ;; esac
+    case "$token" in *[!c0-9-]*) reply_error 'Invalid check token' ;; esac
+    check_result=$CHECKS_DIR/$token.result
+    [ -f "$check_result" ] || reply_error 'Check not found or expired'
+    { read -r check_state
+      read -r check_message_b64
+      read -r check_validation_b64
+    } <<EOF
+$(state_load "$check_result" STATE MESSAGE_B64 VALIDATION_B64)
+EOF
+    case "$check_state" in running|ok|error) ;; *) check_state=running ;; esac
+    json_headers
+    jq -n --arg state "$check_state" --arg message_b64 "$check_message_b64" --arg validation_b64 "$check_validation_b64"       '{ok:true,state:$state,message_b64:$message_b64,validation_b64:$validation_b64}'
+    exit 0
+    ;;
   GET:core-log)
     printf 'Content-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
     tail -n 400 "$CORE_LOG" 2>/dev/null || true
@@ -1122,6 +1142,43 @@ EOF
     [ -n "$password_digest" ] || reply_error 'Could not generate password hash'
     json_headers; jq -n --arg hash "$password_digest" --arg algorithm "$password_algorithm" '{ok:true,hash:$hash,algorithm:$algorithm}'
     ;;
+  check-overrides)
+    id=$(form_value profile_id); profile=$(profile_path "$id") || reply_error 'Invalid profile'
+    [ -f "$profile" ] || reply_error 'Profile not found'
+    [ -s "$(profile_source "$id")" ] || reply_error 'Download the subscription first: there is nothing to build yet'
+    check_dns_enabled=$(form_value dns_override_enabled)
+    case "$check_dns_enabled" in 1) ;; *) check_dns_enabled=0 ;; esac
+    check_dns=$(form_value dns_override)
+    [ "${#check_dns}" -le 16384 ] || reply_error 'DNS override is too large (16 KiB maximum)'
+    if [ -n "$check_dns" ] && ! printf '%s' "$check_dns" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      reply_error 'DNS override must be a JSON object'
+    fi
+    [ "$check_dns_enabled" = 0 ] || [ -n "$check_dns" ] || reply_error 'DNS override is empty'
+    check_rules_enabled=$(form_value routing_rules_enabled)
+    case "$check_rules_enabled" in 1) ;; *) check_rules_enabled=0 ;; esac
+    check_rules=$(form_value routing_rules)
+    [ "${#check_rules}" -le 16384 ] || reply_error 'Routing rules are too large (16 KiB maximum)'
+    if [ -n "$check_rules" ] && ! printf '%s' "$check_rules" | jq -e 'type == "array" and all(.[]; type == "object")' >/dev/null 2>&1; then
+      reply_error 'Routing rules must be a JSON array of objects'
+    fi
+    [ "$check_rules_enabled" = 0 ] || [ -n "$check_rules" ] || reply_error 'Routing rules are empty'
+    check_position=$(form_value routing_rules_position)
+    case "$check_position" in before|after) ;; *) check_position=before ;; esac
+    check_token=c-$(date +%s)-$$
+    check_request=$CHECKS_DIR/$check_token.request
+    if ! { printf 'PROFILE_ID=%s\n' "$id"
+           printf 'DNS_OVERRIDE_ENABLED=%s\n' "$check_dns_enabled"
+           printf 'DNS_OVERRIDE_B64=%s\n' "$(b64_encode "$check_dns")"
+           printf 'ROUTING_RULES_ENABLED=%s\n' "$check_rules_enabled"
+           printf 'ROUTING_RULES_POSITION=%s\n' "$check_position"
+           printf 'ROUTING_RULES_B64=%s\n' "$(b64_encode "$check_rules")"
+         } > "$check_request.tmp" || ! mv "$check_request.tmp" "$check_request"; then
+      rm -f "$check_request.tmp"
+      reply_error 'Could not queue the check'
+    fi
+    chmod 600 "$check_request" 2>/dev/null || true
+    json_headers; jq -n --arg token "$check_token" '{ok:true,token:$token}'
+    ;;
   save-settings)
     state_lock || reply_error 'Could not lock container state'
     load_settings
@@ -1142,7 +1199,7 @@ EOF
     case "$DNS_OVERRIDE_ENABLED" in 1) ;; *) DNS_OVERRIDE_ENABLED=0 ;; esac
     if [ "$(form_value dns_override_present)" = 1 ]; then
       dns_override_text=$(form_value dns_override)
-      [ "${#dns_override_text}" -le 65536 ] || reply_error "DNS override is too large"
+      [ "${#dns_override_text}" -le 16384 ] || reply_error "DNS override is too large (16 KiB maximum)"
       if [ -n "$dns_override_text" ] && ! printf '%s' "$dns_override_text" | jq -e 'type == "object"' >/dev/null 2>&1; then
         reply_error "DNS override must be a JSON object"
       fi
@@ -1155,7 +1212,7 @@ EOF
     case "$value" in before|after) ROUTING_RULES_POSITION=$value ;; esac
     if [ "$(form_value routing_rules_present)" = 1 ]; then
       routing_rules_text=$(form_value routing_rules)
-      [ "${#routing_rules_text}" -le 65536 ] || reply_error "Routing rules are too large"
+      [ "${#routing_rules_text}" -le 16384 ] || reply_error "Routing rules are too large (16 KiB maximum)"
       if [ -n "$routing_rules_text" ] && ! printf '%s' "$routing_rules_text" | jq -e 'type == "array" and all(.[]; type == "object")' >/dev/null 2>&1; then
         reply_error "Routing rules must be a JSON array of objects"
       fi

@@ -971,6 +971,7 @@
     $("save-profile").disabled = ui.busy.has("profile-save");
     $("rebuild-runtime").disabled = ui.busy.has("rebuild");
     $("generate-basic-auth-hash").disabled = ui.busy.has("hash");
+    $("check-overrides").disabled = ui.busy.has("check") || !model.active_profile_id;
     $("add-profile").disabled = ui.busy.has("select");
   }
 
@@ -1290,6 +1291,52 @@ Xray перезапустится, соединения через роутер 
     });
   }
 
+  // Проверка идёт в контейнере тем же конвейером, что и рабочая сборка, поэтому
+  // результат забирается по токену, а не приходит ответом на запрос.
+  async function checkOverrides() {
+    const profile = activeProfile();
+    if (!profile) throw new Error("Сначала выберите подписку");
+    showCheckResult("running", "Проверка идёт", "Контейнер собирает конфигурацию и передаёт её ядру.", "");
+    const { token } = await api("check-overrides", {
+      profile_id: profile.id,
+      dns_override_enabled: $("dns-override-enabled").checked ? "1" : "0",
+      dns_override: $("dns-override").value,
+      routing_rules_enabled: $("routing-rules-enabled").checked ? "1" : "0",
+      routing_rules: $("routing-rules").value,
+      routing_rules_position: document.querySelector('input[name="routing-rules-position"]:checked')?.value || "before",
+    });
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // api() кодирует action целиком, поэтому запрос с параметром идёт напрямую.
+      const response = await fetch(`/cgi-bin/api?action=check-result&token=${encodeURIComponent(token)}`);
+      const result = await response.json();
+      if (!result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      if (result.state === "running") continue;
+      const message = decode(result.message_b64);
+      const output = decode(result.validation_b64);
+      if (result.state === "ok") {
+        showCheckResult("ok", "Конфигурация принята ядром", message, output);
+        toast("Проверка пройдена");
+      } else {
+        showCheckResult("error", "Ядро отклонило конфигурацию", message, output);
+        toast(message, "error");
+      }
+      return;
+    }
+    showCheckResult("error", "Проверка не завершилась", "Контейнер не ответил за две с половиной минуты.", "");
+  }
+
+  function showCheckResult(state, title, text, output) {
+    const block = $("override-check-result");
+    block.classList.remove("hidden");
+    block.classList.toggle("warning-callout", state === "error");
+    $("override-check-title").textContent = title;
+    $("override-check-text").textContent = text;
+    const outputNode = $("override-check-output");
+    outputNode.textContent = output || "";
+    outputNode.classList.toggle("hidden", !output);
+  }
+
   function requestDelete(profileId) {
     const profile = profileById(profileId);
     if (!profile || model.profiles.length < 2) return;
@@ -1440,6 +1487,7 @@ Xray перезапустится, соединения через роутер 
     });
     ui.settingsDirty = true;
   });
+  $("check-overrides").addEventListener("click", () => perform("check", checkOverrides));
   $("xray-sniffing-enabled").addEventListener("change", updateSniffingFields);
   $("dns-override-enabled").addEventListener("change", updateDnsOverrideFields);
   $("routing-rules-enabled").addEventListener("change", updateRoutingRulesFields);

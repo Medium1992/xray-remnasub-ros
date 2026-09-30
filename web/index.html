@@ -86,6 +86,8 @@
             <button type="button" data-settings-tab="traffic"><svg><use href="#i-layers"/></svg><span>Входящий трафик</span></button>
             <button type="button" data-settings-tab="network"><svg><use href="#i-network"/></svg><span>Сеть Alpine</span></button>
             <button type="button" data-settings-tab="xray"><svg><use href="#i-terminal"/></svg><span>Ядро Xray</span></button>
+            <button type="button" data-settings-tab="overrides"><svg><use href="#i-file"/></svg><span>Оверрайды</span></button>
+            <button type="button" data-settings-tab="inbounds"><svg><use href="#i-link"/></svg><span>Локальные входы</span></button>
             <button type="button" data-settings-tab="geodata"><svg><use href="#i-database"/></svg><span>Geodata</span></button>
             <button type="button" data-settings-tab="appearance"><svg><use href="#i-palette"/></svg><span>Оформление</span></button>
             <button type="button" data-settings-tab="access"><svg><use href="#i-lock"/></svg><span>Доступ</span></button>
@@ -164,6 +166,20 @@
                 <label class="text-setting compact"><span><b>Файл доступа</b><small><code>/dev/stdout</code> — в журнал контейнера. <code>none</code> отключает журнал соединений.</small></span><input id="xray-log-access" type="text" maxlength="256" value="/dev/stdout" pattern="none|/[^ ]*" required></label>
                 <label class="setting-row switch-row"><span><b>Журнал DNS</b><small>Писать в лог результаты разрешения имён</small></span><input id="xray-log-dns" type="checkbox"><i></i></label>
                 <label class="setting-row switch-row"><span><b>Маскировать адреса</b><small>Скрывать часть IP и домена в журнале доступа</small></span><input id="xray-log-mask-address" type="checkbox"><i></i></label>
+                <label class="setting-row switch-row"><span><b>Убирать SOCKS из подписки</b><small>Входы <code>socks</code> и <code>mixed</code> из чужого шаблона</small></span><input id="inbound-strip-socks" type="checkbox"><i></i></label>
+                <label class="setting-row switch-row"><span><b>Убирать HTTP из подписки</b><small>Входы <code>http</code> из чужого шаблона</small></span><input id="inbound-strip-http" type="checkbox"><i></i></label>
+                <label class="setting-row switch-row"><span><b>Sniffing</b><small>Определять домен назначения по содержимому соединения</small></span><input id="xray-sniffing-enabled" type="checkbox"><i></i></label>
+                <label class="setting-row switch-row"><span><b>Только маршрутизация</b><small>Не подменять адрес назначения после sniffing</small></span><input id="xray-sniffing-route-only" type="checkbox"><i></i></label>
+                <label class="text-setting compact"><span><b>URL HTTP-проверки</b><small>Резервный адрес, если его не задаёт подходящий observatory или burstObservatory</small></span><input id="xray-probe-url" type="url" maxlength="2048" value="https://www.gstatic.com/generate_204" required></label>
+                <label class="text-setting compact"><span><b>Таймаут HTTP-проверки</b><small>Резерв для конфигураций без observatory и для burstObservatory без timeout</small></span><input id="xray-probe-timeout-seconds" type="number" min="1" max="30" step="1" value="5" required></label>
+                <label class="setting-row setting-select-row"><span><b>Метод HTTP-проверки</b><small>Резерв для конфигураций без observatory и для burstObservatory без метода</small></span><select id="xray-probe-http-method"><option value="HEAD">HEAD</option><option value="GET">GET</option></select></label>
+              </div>
+              <aside class="settings-callout xray-runtime-callout"><svg><use href="#i-terminal"/></svg><div><b>Исходная конфигурация сохраняется</b><p>Выбранный полный JSON остаётся отдельным файлом без изменений. Рядом создаются локальные фрагменты входящего трафика RouterOS, уровня журнала и geodata, необходимые контейнеру.</p></div></aside>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="overrides">
+              <div class="settings-title"><h2>Оверрайды конфигурации</h2><p>Свой JSON поверх того, что прислал провайдер</p></div>
+              <div class="settings-grid">
                 <label class="setting-row switch-row"><span><b>Свой раздел DNS</b><small>Заменяет <code>dns</code> из подписки целиком. Выключено — используется то, что прислал провайдер.</small></span><input id="dns-override-enabled" type="checkbox"><i></i></label>
                 <div class="compound-setting" data-dns-override>
                   <div class="header-editor-intro"><span><b>JSON раздела <code>dns</code></b><small>Объект целиком, как в конфигурации Xray. Проверяется при сохранении и перед запуском ядра.</small></span></div>
@@ -180,8 +196,14 @@
                   </div>
                   <p class="settings-note">Документация Xray: <a href="https://xtls.github.io/config/routing.html" target="_blank" rel="noopener noreferrer">раздел routing</a> · <a href="https://xtls.github.io/config/routing.html#ruleobject" target="_blank" rel="noopener noreferrer">RuleObject</a>. Ссылки на <code>geosite:</code> и <code>geoip:</code> здесь тоже включают загрузку geodata.</p>
                 </div>
-                <label class="setting-row switch-row"><span><b>Убирать SOCKS из подписки</b><small>Входы <code>socks</code> и <code>mixed</code> из чужого шаблона</small></span><input id="inbound-strip-socks" type="checkbox"><i></i></label>
-                <label class="setting-row switch-row"><span><b>Убирать HTTP из подписки</b><small>Входы <code>http</code> из чужого шаблона</small></span><input id="inbound-strip-http" type="checkbox"><i></i></label>
+              </div>
+              <div class="settings-title override-subtitle check-title"><div><h2>Проверка без сохранения</h2><p>Контейнер соберёт конфигурацию с этими оверрайдами и прогонит <code>xray -test</code>. Рабочая конфигурация и перехват не затрагиваются</p></div><button class="secondary-button" type="button" id="check-overrides"><svg><use href="#i-check"/></svg>Проверить</button></div>
+              <aside class="settings-callout override-check-result hidden" id="override-check-result"><svg><use href="#i-alert"/></svg><div><b id="override-check-title">Проверка</b><p id="override-check-text"></p><pre class="override-check-output hidden" id="override-check-output"></pre></div></aside>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="inbounds">
+              <div class="settings-title"><h2>Локальные входы</h2><p>Прокси контейнера для клиентов, помимо перехвата</p></div>
+              <div class="settings-grid">
                 <label class="setting-row switch-row"><span><b>Локальный SOCKS</b><small>Прокси контейнера для клиентов, помимо перехвата. Работает вместе с HTTP.</small></span><input id="local-socks-enabled" type="checkbox"><i></i></label>
                 <label class="text-setting compact" data-local-socks><span><b>Порт SOCKS</b><small>Слушается внутри контейнера</small></span><input id="local-socks-port" type="number" min="1" max="65535" step="1" value="1080" required></label>
                 <label class="text-setting compact" data-local-socks><span><b>Логин SOCKS</b><small>Пустое значение — вход без авторизации</small></span><input id="local-socks-user" type="text" maxlength="128" autocomplete="off"></label>
@@ -192,13 +214,7 @@
                 <label class="text-setting compact" data-local-http><span><b>Логин HTTP</b><small>Пустое значение — вход без авторизации</small></span><input id="local-http-user" type="text" maxlength="128" autocomplete="off"></label>
                 <label class="text-setting compact" data-local-http><span><b>Пароль HTTP</b><small>Пустое поле оставляет сохранённый пароль</small></span><span class="password-field"><input id="local-http-pass" type="password" maxlength="128" autocomplete="new-password"><button class="icon-button" type="button" data-toggle-password="local-http-pass" title="Показать пароль"><svg><use href="#i-eye"/></svg></button></span></label>
                 <label class="setting-row switch-row" data-local-http><span><b>Снять пароль HTTP</b><small>Сохранит вход без авторизации</small></span><input id="local-http-pass-clear" type="checkbox"><i></i></label>
-                <label class="setting-row switch-row"><span><b>Sniffing</b><small>Определять домен назначения по содержимому соединения</small></span><input id="xray-sniffing-enabled" type="checkbox"><i></i></label>
-                <label class="setting-row switch-row"><span><b>Только маршрутизация</b><small>Не подменять адрес назначения после sniffing</small></span><input id="xray-sniffing-route-only" type="checkbox"><i></i></label>
-                <label class="text-setting compact"><span><b>URL HTTP-проверки</b><small>Резервный адрес, если его не задаёт подходящий observatory или burstObservatory</small></span><input id="xray-probe-url" type="url" maxlength="2048" value="https://www.gstatic.com/generate_204" required></label>
-                <label class="text-setting compact"><span><b>Таймаут HTTP-проверки</b><small>Резерв для конфигураций без observatory и для burstObservatory без timeout</small></span><input id="xray-probe-timeout-seconds" type="number" min="1" max="30" step="1" value="5" required></label>
-                <label class="setting-row setting-select-row"><span><b>Метод HTTP-проверки</b><small>Резерв для конфигураций без observatory и для burstObservatory без метода</small></span><select id="xray-probe-http-method"><option value="HEAD">HEAD</option><option value="GET">GET</option></select></label>
               </div>
-              <aside class="settings-callout xray-runtime-callout"><svg><use href="#i-terminal"/></svg><div><b>Исходная конфигурация сохраняется</b><p>Выбранный полный JSON остаётся отдельным файлом без изменений. Рядом создаются локальные фрагменты входящего трафика RouterOS, уровня журнала и geodata, необходимые контейнеру.</p></div></aside>
             </section>
 
             <section class="settings-section settings-panel" data-settings-panel="geodata">

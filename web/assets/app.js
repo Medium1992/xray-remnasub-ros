@@ -910,9 +910,10 @@
     renderRuntime();
     renderSubscriptions();
     renderSettings(forceSettings);
-    // Сводка geodata только читается, поэтому обновляется всегда, а не под
-    // флагом settingsDirty.
+    // Сводка geodata и статусы sysctl только читаются, поэтому обновляются
+    // всегда, а не под флагом settingsDirty.
     updateGeodataFields();
+    renderSysctlStates();
     renderActionStates();
     if (ui.editorProfileId) {
       const editorProfile = profileById(ui.editorProfileId);

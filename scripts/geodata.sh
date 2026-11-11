@@ -452,7 +452,10 @@ prepare() {
   : > "$warnings_jsonl"
   : > "$publish_manifest"
 
-  jq -e --argjson max_assets "$MAX_ASSETS" '
+  # GEODATA_EXTRA_REFS — входы контейнера: их sniffing может ссылаться на
+  # geosite и geoip в исключениях, а в выбранной конфигурации их нет.
+  [ -n "${GEODATA_EXTRA_REFS:-}" ] && [ -s "$GEODATA_EXTRA_REFS" ] || GEODATA_EXTRA_REFS=/dev/null
+  jq -e --argjson max_assets "$MAX_ASSETS" --slurpfile extra "$GEODATA_EXTRA_REFS" '
     def ascii_space:
       . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32;
     def safe_path_char:
@@ -472,7 +475,7 @@ prepare() {
     . as $config |
     # Ссылки на геобазы могут стоять не только в routing.rules, но и в
     # dns.servers.domains и expectIPs, поэтому ищем по всей конфигурации.
-    (del(.geodata) | [.. | strings] | any(
+    ([(del(.geodata) | .. | strings), ($extra | .. | strings)] | any(
        startswith("geoip:") or startswith("geosite:") or
        startswith("ext:") or startswith("ext-ip:"))) as $needs_geodata |
     if $needs_geodata | not then

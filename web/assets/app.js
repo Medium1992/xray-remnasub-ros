@@ -654,7 +654,7 @@
       model.dns_override_enabled, model.dns_override,
       model.routing_rules_enabled, model.routing_rules_position, model.routing_rules,
       model.extra_outbounds_enabled, model.extra_outbounds,
-      model.inbound_strip_socks, model.inbound_strip_http,
+      model.inbound_strip_socks, model.inbound_strip_http, model.dns_inbound_enabled, model.dns_inbound_port, model.fakedns_guard_enabled,
       model.local_socks_enabled, model.local_socks_port, model.local_socks_user, model.local_socks_has_pass,
       model.local_http_enabled, model.local_http_port, model.local_http_user, model.local_http_has_pass,
       model.log_level, model.xray_log_error, model.xray_log_access, model.xray_log_dns, model.xray_log_mask_address,
@@ -664,6 +664,8 @@
       model.network_ct_last_ack, model.network_ct_time_wait, model.network_ct_close,
       model.network_ct_udp_stream, model.xray_sniffing_enabled, model.xray_sniffing_route_only,
       model.xray_sniffing_inherit, model.xray_sniffing_excluded, model.default_hwid,
+      model.xray_sniffing_dest, model.xray_sniffing_metadata_only, model.xray_sniffing_excluded_ips,
+      model.tun_mtu, model.dns_inbound_listen, model.local_socks_listen, model.local_http_listen,
       model.network_tcp_notsent_lowat, model.network_tcp_slow_start_after_idle, model.network_tcp_mtu_probing,
       model.network_tcp_fin_timeout, model.network_tcp_congestion, model.network_tcp_buffer_max,
       model.tcp_congestion_available, model.sysctl,
@@ -702,8 +704,14 @@
 
   function updateSniffingFields() {
     const on = $("xray-sniffing-enabled").checked;
+    const metadataOnly = $("xray-sniffing-metadata-only").checked;
     $("xray-sniffing-route-only").disabled = !on;
-    $("xray-sniffing-excluded").disabled = !on;
+    $("xray-sniffing-metadata-only").disabled = !on;
+    all("[data-sniffing-dest]").forEach((input) => { input.disabled = !on || metadataOnly; });
+    // Исключения дописываются и к унаследованному sniffing.
+    const exclusions = on || $("xray-sniffing-inherit").checked;
+    $("xray-sniffing-excluded").disabled = !exclusions;
+    $("xray-sniffing-excluded-ips").disabled = !exclusions;
   }
 
   function updateDnsOverrideFields() {
@@ -719,6 +727,7 @@
   }
 
   function updateLocalInboundFields() {
+    all("[data-dns-inbound]").forEach((field) => field.classList.toggle("hidden", !$("dns-inbound-enabled").checked));
     all("[data-local-socks]").forEach((field) => field.classList.toggle("hidden", !$("local-socks-enabled").checked));
     all("[data-local-http]").forEach((field) => field.classList.toggle("hidden", !$("local-http-enabled").checked));
   }
@@ -828,6 +837,13 @@
     updateExtraOutboundsFields();
     $("inbound-strip-socks").checked = enabled(model.inbound_strip_socks ?? 1);
     $("inbound-strip-http").checked = enabled(model.inbound_strip_http ?? 1);
+    $("dns-inbound-enabled").checked = enabled(model.dns_inbound_enabled);
+    $("fakedns-guard-enabled").checked = enabled(model.fakedns_guard_enabled);
+    $("dns-inbound-port").value = model.dns_inbound_port ?? 53;
+    $("dns-inbound-listen").value = model.dns_inbound_listen || "0.0.0.0";
+    $("local-socks-listen").value = model.local_socks_listen || "0.0.0.0";
+    $("local-http-listen").value = model.local_http_listen || "0.0.0.0";
+    $("tun-mtu").value = model.tun_mtu ?? 1500;
     $("local-socks-enabled").checked = enabled(model.local_socks_enabled);
     $("local-socks-port").value = model.local_socks_port ?? 1080;
     $("local-socks-user").value = model.local_socks_user || "";
@@ -849,6 +865,10 @@
     $("xray-sniffing-route-only").checked = Number(model.xray_sniffing_route_only ?? 0) !== 0;
     $("xray-sniffing-inherit").checked = Number(model.xray_sniffing_inherit ?? 1) !== 0;
     $("xray-sniffing-excluded").value = model.xray_sniffing_excluded || "";
+    $("xray-sniffing-excluded-ips").value = model.xray_sniffing_excluded_ips || "";
+    $("xray-sniffing-metadata-only").checked = enabled(model.xray_sniffing_metadata_only);
+    const sniffingDest = Array.isArray(model.xray_sniffing_dest) ? model.xray_sniffing_dest : ["http", "tls", "quic"];
+    all("[data-sniffing-dest]").forEach((input) => { input.checked = sniffingDest.includes(input.dataset.sniffingDest); });
     $("xray-probe-url").value = model.xray_probe_url || "https://www.gstatic.com/generate_204";
     $("xray-probe-timeout-seconds").value = model.xray_probe_timeout_seconds || 5;
     const probeMethod = String(model.xray_probe_http_method || "HEAD").toUpperCase();
@@ -1365,6 +1385,13 @@ Xray перезапустится, соединения через роутер 
         extra_outbounds: $("extra-outbounds").value,
         inbound_strip_socks: $("inbound-strip-socks").checked ? "1" : "0",
         inbound_strip_http: $("inbound-strip-http").checked ? "1" : "0",
+        dns_inbound_enabled: $("dns-inbound-enabled").checked ? "1" : "0",
+        fakedns_guard_enabled: $("fakedns-guard-enabled").checked ? "1" : "0",
+        dns_inbound_port: $("dns-inbound-port").value,
+        dns_inbound_listen: $("dns-inbound-listen").value.trim(),
+        local_socks_listen: $("local-socks-listen").value.trim(),
+        local_http_listen: $("local-http-listen").value.trim(),
+        tun_mtu: $("tun-mtu").value,
         local_socks_enabled: $("local-socks-enabled").checked ? "1" : "0",
         local_socks_port: $("local-socks-port").value,
         local_socks_user: $("local-socks-user").value.trim(),
@@ -1403,6 +1430,11 @@ Xray перезапустится, соединения через роутер 
         xray_sniffing_inherit: $("xray-sniffing-inherit").checked ? "1" : "0",
         xray_sniffing_excluded_present: "1",
         xray_sniffing_excluded: $("xray-sniffing-excluded").value,
+        xray_sniffing_excluded_ips_present: "1",
+        xray_sniffing_excluded_ips: $("xray-sniffing-excluded-ips").value,
+        xray_sniffing_metadata_only: $("xray-sniffing-metadata-only").checked ? "1" : "0",
+        xray_sniffing_dest_present: "1",
+        xray_sniffing_dest: all("[data-sniffing-dest]").filter((input) => input.checked).map((input) => input.dataset.sniffingDest).join(","),
         xray_probe_url: $("xray-probe-url").value.trim(),
         xray_probe_timeout_seconds: $("xray-probe-timeout-seconds").value,
         xray_probe_http_method: $("xray-probe-http-method").value,
@@ -1632,9 +1664,12 @@ Xray перезапустится, соединения через роутер 
   }));
   $("failover-enabled").addEventListener("change", updateFailoverFields);
   $("xray-sniffing-enabled").addEventListener("change", updateSniffingFields);
+  $("xray-sniffing-metadata-only").addEventListener("change", updateSniffingFields);
+  $("xray-sniffing-inherit").addEventListener("change", updateSniffingFields);
   $("dns-override-enabled").addEventListener("change", updateDnsOverrideFields);
   $("routing-rules-enabled").addEventListener("change", updateRoutingRulesFields);
   $("extra-outbounds-enabled").addEventListener("change", updateExtraOutboundsFields);
+  $("dns-inbound-enabled").addEventListener("change", updateLocalInboundFields);
   $("local-socks-enabled").addEventListener("change", updateLocalInboundFields);
   $("local-http-enabled").addEventListener("change", updateLocalInboundFields);
   // Перерисовка из редактора, а не из модели, чтобы не потерять несохранённое.

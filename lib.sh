@@ -32,6 +32,24 @@ adopt_self_pid() {
 }
 
 valid_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; }
+
+# Адрес прослушивания входа: IPv4 или IPv6 литералом. Имена не принимаются —
+# Xray разрешал бы их при каждом старте.
+valid_listen_address() {
+  case "${1:-}" in
+    *:*)
+      case "$1" in *[!0-9A-Fa-f:.]*) return 1 ;; esac
+      [ "${#1}" -le 45 ] || return 1
+      ;;
+    *.*.*.*)
+      printf '%s\n' "$1" | awk -F. 'NF == 4 {
+          for (i = 1; i <= 4; i++) if ($i !~ /^[0-9]+$/ || length($i) > 3 || $i + 0 > 255) exit 1
+          exit 0
+        } { exit 1 }' || return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
 # Значение sysctl: число в диапазоне либо слово system. Остальное заменяется
 # значением по умолчанию из последнего аргумента.
 valid_sysctl_number() {
@@ -623,6 +641,16 @@ load_settings() {
     read -r XRAY_SNIFFING_INHERIT
     read -r XRAY_SNIFFING_EXCLUDE_B64
     read -r DEFAULT_HWID
+    read -r DNS_INBOUND_ENABLED
+    read -r DNS_INBOUND_PORT
+    read -r FAKEDNS_GUARD_ENABLED
+    read -r XRAY_SNIFFING_DEST
+    read -r XRAY_SNIFFING_METADATA_ONLY
+    read -r XRAY_SNIFFING_EXCLUDE_IPS_B64
+    read -r TUN_MTU
+    read -r DNS_INBOUND_LISTEN
+    read -r LOCAL_SOCKS_LISTEN
+    read -r LOCAL_HTTP_LISTEN
   } <<EOF
 $(state_load "$STATE" \
   ACTIVE_PROFILE_ID RUN_ENABLED GLOBAL_HEADERS_B64 LISTENER_MODE REDIR_PORT TPROXY_PORT LOG_LEVEL \
@@ -642,7 +670,10 @@ $(state_load "$STATE" \
   LOCAL_SOCKS_ENABLED LOCAL_SOCKS_PORT LOCAL_SOCKS_USER_B64 LOCAL_SOCKS_PASS_B64 \
   LOCAL_HTTP_ENABLED LOCAL_HTTP_PORT LOCAL_HTTP_USER_B64 LOCAL_HTTP_PASS_B64 \
   UI_THEME UI_ACCENT \
-  XRAY_SNIFFING_INHERIT XRAY_SNIFFING_EXCLUDE_B64 DEFAULT_HWID)
+  XRAY_SNIFFING_INHERIT XRAY_SNIFFING_EXCLUDE_B64 DEFAULT_HWID \
+  DNS_INBOUND_ENABLED DNS_INBOUND_PORT FAKEDNS_GUARD_ENABLED \
+  XRAY_SNIFFING_DEST XRAY_SNIFFING_METADATA_ONLY XRAY_SNIFFING_EXCLUDE_IPS_B64 \
+  TUN_MTU DNS_INBOUND_LISTEN LOCAL_SOCKS_LISTEN LOCAL_HTTP_LISTEN)
 EOF
 
   case "$RUN_ENABLED" in 0|1) ;; *) RUN_ENABLED=0 ;; esac
@@ -715,6 +746,26 @@ EOF
   # сборки — проще не дать им совпасть здесь.
   [ "$LOCAL_HTTP_ENABLED" = 0 ] || [ "$LOCAL_SOCKS_ENABLED" = 0 ] ||
     [ "$LOCAL_HTTP_PORT" != "$LOCAL_SOCKS_PORT" ] || LOCAL_HTTP_ENABLED=0
+  # DNS-вход включён и там, где ключа ещё нет: без него запросы к адресу
+  # контейнера уходили в никуда, а это и есть то, что чинится.
+  case "$DNS_INBOUND_ENABLED" in 0) ;; *) DNS_INBOUND_ENABLED=1 ;; esac
+  valid_number "$DNS_INBOUND_PORT" && [ "$DNS_INBOUND_PORT" -ge 1 ] && [ "$DNS_INBOUND_PORT" -le 65535 ] || DNS_INBOUND_PORT=53
+  case "$FAKEDNS_GUARD_ENABLED" in 0) ;; *) FAKEDNS_GUARD_ENABLED=1 ;; esac
+  # destOverride своих входов: подмножество http, tls, quic через двоеточие —
+  # запятую не пропустило бы восстановление из резервной копии.
+  # Пустое значение допустимо (только fakedns, если он есть); отсутствие ключа
+  # — прежнее умолчание. fakedns сюда не входит: он добавляется сам.
+  case "$XRAY_SNIFFING_DEST" in
+    none) ;;
+    *) XRAY_SNIFFING_DEST=$(printf '%s' "${XRAY_SNIFFING_DEST:-http:tls:quic}" | tr ',:' '\n\n' |
+         awk '$0 == "http" || $0 == "tls" || $0 == "quic" { if (!seen[$0]++) out = out (out == "" ? "" : ":") $0 }
+              END { print (out == "" ? "none" : out) }') ;;
+  esac
+  case "$XRAY_SNIFFING_METADATA_ONLY" in 1) ;; *) XRAY_SNIFFING_METADATA_ONLY=0 ;; esac
+  valid_number "$TUN_MTU" && [ "$TUN_MTU" -ge 576 ] && [ "$TUN_MTU" -le 9000 ] || TUN_MTU=1500
+  valid_listen_address "$DNS_INBOUND_LISTEN" || DNS_INBOUND_LISTEN=0.0.0.0
+  valid_listen_address "$LOCAL_SOCKS_LISTEN" || LOCAL_SOCKS_LISTEN=0.0.0.0
+  valid_listen_address "$LOCAL_HTTP_LISTEN" || LOCAL_HTTP_LISTEN=0.0.0.0
   valid_theme "$UI_THEME" || UI_THEME=auto
   valid_accent "$UI_ACCENT" || UI_ACCENT=
 }
@@ -783,6 +834,16 @@ UI_ACCENT=$UI_ACCENT
 XRAY_SNIFFING_INHERIT=${XRAY_SNIFFING_INHERIT:-1}
 XRAY_SNIFFING_EXCLUDE_B64=${XRAY_SNIFFING_EXCLUDE_B64:-}
 DEFAULT_HWID=${DEFAULT_HWID:-RouterOS-Solomon}
+DNS_INBOUND_ENABLED=${DNS_INBOUND_ENABLED:-1}
+DNS_INBOUND_PORT=${DNS_INBOUND_PORT:-53}
+FAKEDNS_GUARD_ENABLED=${FAKEDNS_GUARD_ENABLED:-1}
+XRAY_SNIFFING_DEST=${XRAY_SNIFFING_DEST:-http:tls:quic}
+XRAY_SNIFFING_METADATA_ONLY=${XRAY_SNIFFING_METADATA_ONLY:-0}
+XRAY_SNIFFING_EXCLUDE_IPS_B64=${XRAY_SNIFFING_EXCLUDE_IPS_B64:-}
+TUN_MTU=${TUN_MTU:-1500}
+DNS_INBOUND_LISTEN=${DNS_INBOUND_LISTEN:-0.0.0.0}
+LOCAL_SOCKS_LISTEN=${LOCAL_SOCKS_LISTEN:-0.0.0.0}
+LOCAL_HTTP_LISTEN=${LOCAL_HTTP_LISTEN:-0.0.0.0}
 EOF
   atomic_replace "$state_tmp" "$STATE"
 }
@@ -1153,10 +1214,136 @@ build_xray_config() {
     rm -f "$build_outbounds"
   fi
 
+  # Пулы fakedns, которые конфигурация реально использует. Раздел fakedns —
+  # объект или массив пулов; без него fakedns включает и сервер "fakedns" в
+  # dns.servers, и тогда ядро само заводит пулы по умолчанию с учётом
+  # queryStrategy (infra/conf/fakedns.go). Пустой массив — fakedns нет.
+  build_fakedns_pools=$(jq -c '
+      def pools_of: (if type == "array" then . elif type == "object" then [.] else [] end) |
+        map(.ipPool? | select(type == "string" and length > 0));
+      (.fakedns? // .fakeDns?) as $section |
+      if $section != null then ($section | pools_of)
+      elif any((.dns.servers? // [])[]?;
+               (if type == "object" then .address? else . end) |
+               type == "string" and ascii_downcase == "fakedns") then
+        ((.dns.queryStrategy? // "") | tostring | ascii_downcase) as $strategy |
+        if (["useip4","useipv4","use_ip4","use_ipv4","use_ip_v4","use-ip4","use-ipv4","use-ip-v4"] | index($strategy)) != null then ["198.18.0.0/15"]
+        elif (["useip6","useipv6","use_ip6","use_ipv6","use_ip_v6","use-ip6","use-ipv6","use-ip-v6"] | index($strategy)) != null then ["2001:2::/48"]
+        else ["198.18.0.0/15","2001:2::/48"] end
+      else [] end
+    ' "$BUILD_CANDIDATE_DIR/10-subscription.json" 2>/dev/null) || build_fakedns_pools='[]'
+  [ -n "$build_fakedns_pools" ] || build_fakedns_pools='[]'
+
+  # Защита от петли через fakedns. Фейковый адрес, который ядро не сопоставило
+  # с доменом (кэш пула вытеснен, перезапуск ядра), иначе ушёл бы в proxy как
+  # обычный IP. Сопоставленный сюда не попадает: sniffing fakedns подменяет
+  # назначение на домен даже при routeOnly (app/dispatcher/default.go). Пул,
+  # который подписка уже отправляет в blackhole, не дублируется.
+  if [ "$FAKEDNS_GUARD_ENABLED" = 1 ] && [ "$build_fakedns_pools" != '[]' ]; then
+    build_guard_plan=$(jq -c --argjson pools "$build_fakedns_pools" '
+        [(.outbounds // [])[]? | select(type == "object" and
+           ((.protocol? // "") | tostring | ascii_downcase) == "blackhole" and
+           (.tag? | type) == "string" and (.tag | length) > 0) | .tag] as $blocks |
+        [(.routing.rules? // [])[]? | select(type == "object" and
+           ((.outboundTag? // "") as $tag | $blocks | index($tag)) != null) |
+         (.ip? // []) | if type == "array" then .[] else . end] as $dropped |
+        {block: ($blocks[0] // null),
+         missing: [$pools[] | . as $pool | select(($dropped | index($pool)) == null)]}
+      ' "$BUILD_CANDIDATE_DIR/10-subscription.json" 2>/dev/null) || build_guard_plan=
+    build_guard_missing=$(printf '%s' "$build_guard_plan" | jq -c '.missing // []' 2>/dev/null || printf '[]')
+    if [ -n "$build_guard_plan" ] && [ "$build_guard_missing" != '[]' ]; then
+      build_guard_block=$(printf '%s' "$build_guard_plan" | jq -r '.block // empty')
+      build_guard_own=0
+      if [ -z "$build_guard_block" ]; then
+        if jq -e 'any((.outbounds // [])[]?; .tag? == "xray-remnasub-block")' \
+             "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1; then
+          BUILD_ERROR='Outbound tag xray-remnasub-block is reserved for the container fakedns guard'
+          discard_build_candidate
+          return 1
+        fi
+        build_guard_block=xray-remnasub-block
+        build_guard_own=1
+      fi
+      build_guard_tmp=$RUNTIME_DIR/$build_id.fakedns-guard.$build_tag.json
+      if ! jq --arg block "$build_guard_block" --argjson own "$build_guard_own" --argjson pools "$build_guard_missing" '
+           (if $own == 1 then .outbounds = ((.outbounds // []) + [{tag:$block,protocol:"blackhole"}]) else . end) |
+           .routing = ((.routing // {}) |
+             .rules = ([{ip:$pools,network:"tcp,udp",outboundTag:$block}] + (.rules // [])))
+         ' "$BUILD_CANDIDATE_DIR/10-subscription.json" > "$build_guard_tmp" ||
+         ! mv "$build_guard_tmp" "$BUILD_CANDIDATE_DIR/10-subscription.json"; then
+        rm -f "$build_guard_tmp"
+        BUILD_ERROR='Could not add the fakedns guard rule'
+        discard_build_candidate
+        return 1
+      fi
+      build_event INFO "$build_id" "fakedns pools $(printf '%s' "$build_guard_missing" | jq -r 'join(", ")') routed to $build_guard_block: an unmapped fake address must not reach a proxy"
+    fi
+  fi
+
+  # DNS-вход контейнера. Входы подписки вырезаются вместе с её dns-in, а
+  # пакеты на адрес контейнера перехват пропускает к локальным сокетам: без
+  # своего слушателя запросы клиентов на :53 уходили в никуда. Запросы уходят в
+  # dns-outbound подписки: его rules, dialerProxy и адрес задал автор, и
+  # контейнер их не переписывает. Свой outbound добавляется, только если в
+  # подписке такого нет; без rules ядро отдаёт A/AAAA встроенному DNS, а на
+  # остальные типы отвечает пустым.
+  if [ "$DNS_INBOUND_ENABLED" = 1 ]; then
+    build_dns_outbound=$(jq -r '
+        [(.outbounds // [])[]? |
+         select(type == "object" and ((.protocol? // "") | tostring | ascii_downcase) == "dns" and
+                (.tag? | type) == "string" and (.tag | length) > 0) | .tag] | first // empty
+      ' "$BUILD_CANDIDATE_DIR/10-subscription.json" 2>/dev/null | tr -d '\r\n' | head -c 256) || build_dns_outbound=
+    build_dns_own=0
+    if [ -z "$build_dns_outbound" ]; then
+      if jq -e 'any((.outbounds // [])[]?; .tag? == "xray-remnasub-dns")' \
+           "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1; then
+        BUILD_ERROR='Outbound tag xray-remnasub-dns is reserved for the container DNS inbound'
+        discard_build_candidate
+        return 1
+      fi
+      build_dns_outbound=xray-remnasub-dns
+      build_dns_own=1
+    fi
+    build_dns_inbound_tmp=$RUNTIME_DIR/$build_id.dns-inbound.$build_tag.json
+    if ! jq --arg outbound "$build_dns_outbound" --argjson own "$build_dns_own" '
+         (if $own == 1 then .outbounds = ((.outbounds // []) + [{tag:$outbound,protocol:"dns"}]) else . end) |
+         .routing = ((.routing // {}) |
+           .rules = ([{inboundTag:["xray-remnasub-dns"],outboundTag:$outbound}] + (.rules // [])))
+       ' "$BUILD_CANDIDATE_DIR/10-subscription.json" > "$build_dns_inbound_tmp" ||
+       ! mv "$build_dns_inbound_tmp" "$BUILD_CANDIDATE_DIR/10-subscription.json"; then
+      rm -f "$build_dns_inbound_tmp"
+      BUILD_ERROR='Could not add the container DNS inbound'
+      discard_build_candidate
+      return 1
+    fi
+    if [ "$build_dns_own" = 1 ]; then
+      build_event INFO "$build_id" "DNS inbound on port $DNS_INBOUND_PORT routed to the container dns outbound; the subscription has none"
+    else
+      build_event INFO "$build_id" "DNS inbound on port $DNS_INBOUND_PORT routed to subscription outbound $build_dns_outbound"
+      # dokodemo без address отдаёт запрос с назначением 127.0.0.1:<порт>.
+      # Пересылка по назначению (action direct, у старых подписок nonIPQuery
+      # skip) без dialerProxy и без своего адреса вернула бы его в этот же вход.
+      if jq -e --arg tag "$build_dns_outbound" '
+           [(.outbounds // [])[]? | select(.tag? == $tag)][0] |
+           ((.settings.rules? // []) | if type == "array" then . else [] end |
+              any(.[]; ((.action? // "") | tostring | ascii_downcase) == "direct")) as $direct |
+           (((.settings.nonIPQuery? // "") | tostring | ascii_downcase) == "skip") as $skip |
+           ((.settings.address? // .settings.rewriteAddress? // "") | tostring | length > 0) as $rewrite |
+           (((.proxySettings.tag? // "") | tostring | length > 0) or
+            ((.streamSettings.sockopt.dialerProxy? // "") | tostring | length > 0)) as $proxied |
+           ($direct or $skip) and ($rewrite | not) and ($proxied | not)
+         ' "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1; then
+        build_event WARN "$build_id" "outbound $build_dns_outbound forwards some queries to their destination without dialerProxy or its own address; for the DNS inbound that is 127.0.0.1:$DNS_INBOUND_PORT, the inbound itself"
+      fi
+    fi
+  fi
+
   if ! build_inbound_conflict=$(jq -r \
        --arg listener_mode "$build_listener_mode" \
        --argjson redir_port "$REDIR_PORT" \
-       --argjson tproxy_port "$TPROXY_PORT" '
+       --argjson tproxy_port "$TPROXY_PORT" \
+       --argjson dns_enabled "$DNS_INBOUND_ENABLED" \
+       --argjson dns_port "$DNS_INBOUND_PORT" '
        def ascii_space:
          . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32;
        def ascii_digit:
@@ -1209,6 +1396,7 @@ build_xray_config() {
          unique;
        def managed_listeners($mode; $redir; $tproxy):
          [{name:"web UI",network:"tcp",port:80},{name:"mixed",network:"tcp",port:1080}] +
+         (if $dns_enabled == 1 then [{name:"DNS",network:"tcp",port:$dns_port},{name:"DNS",network:"udp",port:$dns_port}] else [] end) +
          if $mode == "tproxy" then [
            {name:"TPROXY",network:"tcp",port:$tproxy},
            {name:"TPROXY",network:"udp",port:$tproxy}
@@ -1252,7 +1440,7 @@ build_xray_config() {
   fi
 
   if ! build_reserved_inbound_tag=$(jq -r '
-       ["xray-remnasub-socks", "xray-remnasub-http", "xray-remnasub-tcp", "xray-remnasub-udp", "xray-remnasub-tproxy", "xray-remnasub-tun"] as $reserved |
+       ["xray-remnasub-socks", "xray-remnasub-http", "xray-remnasub-tcp", "xray-remnasub-udp", "xray-remnasub-tproxy", "xray-remnasub-tun", "xray-remnasub-dns"] as $reserved |
        ([.inbounds[]?.tag? |
          select(type == "string") |
          . as $tag |
@@ -1268,12 +1456,180 @@ build_xray_config() {
     return 1
   fi
 
+  # Входы контейнера собираются до geodata: исключения sniffing могут ссылаться
+  # на geosite и geoip, и такие ссылки тоже требуют геобаз.
+  [ "$XRAY_SNIFFING_ENABLED" = 1 ] && build_sniffing=true || build_sniffing=false
+  [ "$XRAY_SNIFFING_ROUTE_ONLY" = 1 ] && build_route_only=true || build_route_only=false
+  [ "$build_fakedns_pools" != '[]' ] && build_fakedns=true || build_fakedns=false
+  # Sniffing своих входов: унаследованный или свой, со своими исключениями.
+  # Списки уже очищены от пробелов при сохранении: регулярных выражений в jq
+  # сборки для armv5 нет.
+  if ! build_sniffing_plan=$(jq -n -c \
+       --argjson sniffing_enabled "$build_sniffing" \
+       --argjson route_only "$build_route_only" \
+       --argjson inherited "$build_source_sniffing" \
+       --argjson pools "$build_fakedns_pools" \
+       --arg excluded "$(b64_decode "$XRAY_SNIFFING_EXCLUDE_B64")" \
+       --arg excluded_ips "$(b64_decode "$XRAY_SNIFFING_EXCLUDE_IPS_B64")" \
+       --arg dest "$XRAY_SNIFFING_DEST" \
+       --argjson metadata_only "$XRAY_SNIFFING_METADATA_ONLY" '
+       ($excluded | split("\n") | map(select(length > 0))) as $own_excluded |
+       ($excluded_ips | split("\n") | map(select(length > 0))) as $own_excluded_ips |
+       (if $dest == "none" then [] else ($dest | split(":")) end) as $own_dest |
+       ($pools | length > 0) as $fakedns |
+       # StringList в Xray — массив или одна строка.
+       def string_list: if . == null then [] elif type == "array" then . else [.] end;
+       # Адрес в биты без pow и регулярных выражений; null, если не разобрался.
+       def bits($n; $width):
+         reduce range(0; $width) as $i ({n: $n, out: []}; .out = [.n % 2] + .out | .n = ((.n - (.n % 2)) / 2)) | .out;
+       def digits: length > 0 and (explode | all(.[]; . >= 48 and . <= 57));
+       def hexval:
+         explode | map(if . >= 48 and . <= 57 then . - 48 elif . >= 97 and . <= 102 then . - 87
+                       elif . >= 65 and . <= 70 then . - 55 else -100000 end) |
+         reduce .[] as $d (0; . * 16 + $d);
+       def ip4_bits:
+         split(".") as $p |
+         if ($p | length) == 4 and all($p[]; digits and length <= 3) then
+           ($p | map(tonumber)) as $n | if all($n[]; . <= 255) then [$n[] | bits(.; 8)[]] else null end
+         else null end;
+       def ip6_groups: if . == "" then [] else split(":") end;
+       def ip6_bits:
+         split("::") as $halves |
+         if ($halves | length) > 2 then null else
+           ($halves[0] | ip6_groups) as $left |
+           (if ($halves | length) == 2 then ($halves[1] | ip6_groups) else [] end) as $right |
+           (if ($halves | length) == 2 then 8 - ($left | length) - ($right | length) else 0 end) as $fill |
+           ($left + [range(0; $fill) | "0"] + $right) as $groups |
+           if $fill < 0 or ($groups | length) != 8 or any($groups[]; length == 0 or length > 4) then null
+           else ($groups | map(hexval)) as $n |
+             if any($n[]; . < 0 or . > 65535) then null else [$n[] | bits(.; 16)[]] end end
+         end;
+       def cidr:
+         split("/") as $p |
+         if ($p | length) > 2 then null else
+           ($p[0] | if contains(":") then ip6_bits else ip4_bits end) as $b |
+           if $b == null then null else
+             (if ($p | length) == 2 then ($p[1] | if digits and length <= 3 then tonumber else -1 end)
+              else ($b | length) end) as $len |
+             if $len < 0 or $len > ($b | length) then null else {bits: $b, len: $len} end
+           end
+         end;
+       def overlaps($pool):
+         (cidr) as $x | ($pool | cidr) as $y |
+         $x != null and $y != null and ($x.bits | length) == ($y.bits | length) and
+         ([$x.len, $y.len] | min) as $m | $x.bits[0:$m] == $y.bits[0:$m];
+       def with_exclusions:
+         (if ($own_excluded | length) > 0 then .domainsExcluded = ((.domainsExcluded | string_list) + $own_excluded | unique) else . end) |
+         (if ($own_excluded_ips | length) > 0 then .ipsExcluded = ((.ipsExcluded | string_list) + $own_excluded_ips | unique) else . end);
+       def origin: if (. as $entry | $own_excluded_ips | index($entry)) != null then "container settings" else "subscription" end;
+       (if ($inherited | type) == "object" then ($inherited | with_exclusions)
+        else {enabled:$sniffing_enabled,
+              destOverride:($own_dest + (if $fakedns then ["fakedns"] else [] end)),
+              metadataOnly:($metadata_only == 1),
+              routeOnly:$route_only} | with_exclusions end) as $sniffing |
+       ($sniffing.ipsExcluded | string_list) as $ips |
+       # Адрес из ipsExcluded ядро не сниффит вовсе, и fakedns не вернёт ему
+       # домен (app/dispatcher/default.go, shouldOverride). Сеть, задевающая
+       # пул, из своих входов убирается; состав geoip и ext-ip без разбора
+       # .dat не узнать, о них только предупреждение.
+       (if $fakedns then [$ips[] | . as $entry | select(any($pools[]; . as $pool | $entry | overlaps($pool)))] else [] end) as $removed |
+       (if $fakedns then [$ips[] | select(startswith("geoip:") or startswith("ext-ip:"))] else [] end) as $suspicious |
+       ($sniffing |
+        (if ($removed | length) > 0 then .ipsExcluded = [$ips[] | . as $entry | select(($removed | index($entry)) == null)] else . end) |
+        (if (.ipsExcluded | type) == "array" and (.ipsExcluded | length) == 0 then del(.ipsExcluded) else . end)) as $result |
+       # Без fakedns в destOverride ни один фейковый адрес не станет доменом.
+       (($fakedns and $result.enabled == true and
+         (($result.destOverride | string_list) | any(.[]; (tostring | ascii_downcase) == "fakedns" or (tostring | ascii_downcase) == "fakedns+others") | not))) as $add_fakedns |
+       {sniffing: (if $add_fakedns then $result | .destOverride = (($result.destOverride | string_list) + ["fakedns"]) else $result end),
+        removed: [$removed[] | {entry: ., from: origin}],
+        suspicious: $suspicious,
+        added_fakedns: $add_fakedns}
+     '); then
+    BUILD_ERROR='Could not assemble sniffing settings for container inbounds'
+    discard_build_candidate
+    return 1
+  fi
+  build_managed_sniffing=$(printf '%s' "$build_sniffing_plan" | jq -c '.sniffing')
+  if ! jq -n --arg log_level "$LOG_LEVEL" --arg error "$XRAY_LOG_ERROR" --arg access "$XRAY_LOG_ACCESS" \
+        --argjson dns_log "$XRAY_LOG_DNS" --argjson mask_address "$XRAY_LOG_MASK_ADDRESS" \
+        '{log: ({loglevel: $log_level, dnsLog: ($dns_log == 1), maskAddress: (if $mask_address == 1 then "quarter" else "" end)}
+                + (if $error == "" then {} else {error: $error} end)
+                + (if $access == "" then {} else {access: $access} end))}' > "$BUILD_CANDIDATE_DIR/80-container-log.json" ||
+     ! jq -n \
+       --arg listener_mode "$build_listener_mode" \
+       --argjson redir_port "$REDIR_PORT" \
+       --argjson tproxy_port "$TPROXY_PORT" \
+       --argjson managed_sniffing "$build_managed_sniffing" \
+       --argjson tun_mtu "$TUN_MTU" \
+       --argjson socks_enabled "$LOCAL_SOCKS_ENABLED" \
+       --argjson socks_port "$LOCAL_SOCKS_PORT" \
+       --arg socks_listen "$LOCAL_SOCKS_LISTEN" \
+       --arg socks_user "$(b64_decode "$LOCAL_SOCKS_USER_B64")" \
+       --arg socks_pass "$(b64_decode "$LOCAL_SOCKS_PASS_B64")" \
+       --argjson http_enabled "$LOCAL_HTTP_ENABLED" \
+       --argjson http_port "$LOCAL_HTTP_PORT" \
+       --arg http_listen "$LOCAL_HTTP_LISTEN" \
+       --arg http_user "$(b64_decode "$LOCAL_HTTP_USER_B64")" \
+       --arg http_pass "$(b64_decode "$LOCAL_HTTP_PASS_B64")" \
+       --argjson dns_enabled "$DNS_INBOUND_ENABLED" \
+       --argjson dns_port "$DNS_INBOUND_PORT" \
+       --arg dns_listen "$DNS_INBOUND_LISTEN" '
+       $managed_sniffing as $sniffing |
+       (if $socks_enabled == 1 then [
+         {tag:"xray-remnasub-socks",port:$socks_port,listen:$socks_listen,protocol:"socks",
+          settings:({udp:true} + (if $socks_user == "" then {auth:"noauth"}
+                                  else {auth:"password",accounts:[{user:$socks_user,pass:$socks_pass}]} end)),
+          sniffing:$sniffing}
+       ] else [] end) as $socks_inbound |
+       (if $http_enabled == 1 then [
+         {tag:"xray-remnasub-http",port:$http_port,listen:$http_listen,protocol:"http",
+          settings:(if $http_user == "" then {}
+                    else {accounts:[{user:$http_user,pass:$http_pass}]} end),
+          sniffing:$sniffing}
+       ] else [] end) as $http_inbound |
+       # Без sniffing: dns-outbound сам разбирает запрос, а подмена адреса
+       # назначения по sniffing ему ни к чему.
+       (if $dns_enabled == 1 then [
+         {tag:"xray-remnasub-dns",port:$dns_port,listen:$dns_listen,protocol:"dokodemo-door",
+          settings:{network:"tcp,udp"}}
+       ] else [] end) as $dns_inbound |
+       {inbounds:($dns_inbound + $socks_inbound + $http_inbound + if $listener_mode == "tproxy" then [
+         {tag:"xray-remnasub-tproxy",port:$tproxy_port,protocol:"dokodemo-door",settings:{network:"tcp,udp",followRedirect:true},streamSettings:{sockopt:{tproxy:"tproxy"}},sniffing:$sniffing}
+       ] elif $listener_mode == "redir-tproxy" then [
+         {tag:"xray-remnasub-tcp",port:$redir_port,protocol:"dokodemo-door",settings:{network:"tcp",followRedirect:true},streamSettings:{sockopt:{tproxy:"redirect"}},sniffing:$sniffing},
+         {tag:"xray-remnasub-udp",port:$tproxy_port,protocol:"dokodemo-door",settings:{network:"udp",followRedirect:true},streamSettings:{sockopt:{tproxy:"tproxy"}},sniffing:$sniffing}
+       ] else [
+         {tag:"xray-remnasub-tcp",port:$redir_port,protocol:"dokodemo-door",settings:{network:"tcp",followRedirect:true},streamSettings:{sockopt:{tproxy:"redirect"}},sniffing:$sniffing},
+         {tag:"xray-remnasub-tun",protocol:"tun",settings:{name:"Xray",mtu:$tun_mtu,gateway:["100.64.0.1/32"]},sniffing:$sniffing}
+       ] end)}
+     ' > "$BUILD_CANDIDATE_DIR/90-container-inbounds.json"; then
+    BUILD_ERROR='Could not assemble RouterOS configuration overlay'
+    discard_build_candidate
+    return 1
+  fi
+  if [ -n "$build_source_sniffing_from" ]; then
+    build_event INFO "$build_id" "sniffing settings taken from source inbound $build_source_sniffing_from"
+  elif [ "$XRAY_SNIFFING_INHERIT" = 1 ]; then
+    build_event INFO "$build_id" 'source inbounds carry no sniffing settings; container settings are used'
+  fi
+  printf '%s' "$build_sniffing_plan" | jq -r '.removed[] | "\(.entry)\t\(.from)"' 2>/dev/null |
+    while IFS='	' read -r build_removed_entry build_removed_from; do
+      build_event WARN "$build_id" "sniffing ipsExcluded entry $build_removed_entry (from $build_removed_from) covers a fakedns pool and was dropped: a fake address there would never be turned back into its domain"
+    done
+  printf '%s' "$build_sniffing_plan" | jq -r '.suspicious[]' 2>/dev/null |
+    while IFS= read -r build_suspicious_entry; do
+      build_event WARN "$build_id" "sniffing ipsExcluded entry $build_suspicious_entry may cover a fakedns pool (geoip:private in common geoip.dat includes 198.18.0.0/15); fake addresses there stay unresolved"
+    done
+  if [ "$(printf '%s' "$build_sniffing_plan" | jq -r '.added_fakedns' 2>/dev/null)" = true ]; then
+    build_event WARN "$build_id" 'the configuration uses fakedns but the sniffing destOverride lacked it; fakedns was added to the container inbounds'
+  fi
+
   # Секция geodata убирается из фрагмента подписки, когда на геобазы никто не
   # ссылается: оверлей идёт позже и её собственную секцию не отменяет.
-  if ! jq -e 'del(.geodata) | [.. | strings] | any(
+  if ! jq -e -s '[(.[0] | del(.geodata) | .. | strings), (.[1] | .. | strings)] | any(
         startswith("geoip:") or startswith("geosite:") or
         startswith("ext:") or startswith("ext-ip:"))' \
-       "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1 &&
+       "$BUILD_CANDIDATE_DIR/10-subscription.json" "$BUILD_CANDIDATE_DIR/90-container-inbounds.json" >/dev/null 2>&1 &&
      jq -e 'has("geodata") and .geodata != null' \
        "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1; then
     build_geodata_strip=$RUNTIME_DIR/$build_id.geodata-strip.$build_tag.json
@@ -1297,7 +1653,8 @@ build_xray_config() {
     build_geodata_force=1
     build_event INFO "$build_id" 'geodata will be downloaded again on request'
   fi
-  if ! GEODATA_FORCE_REFRESH="$build_geodata_force" /scripts/geodata.sh prepare \
+  if ! GEODATA_FORCE_REFRESH="$build_geodata_force" \
+       GEODATA_EXTRA_REFS="$BUILD_CANDIDATE_DIR/90-container-inbounds.json" /scripts/geodata.sh prepare \
        "$BUILD_CANDIDATE_DIR/10-subscription.json" \
        "$BUILD_CANDIDATE_DIR/70-container-geodata-tail.json" \
        "$build_metadata/geodata.json" \
@@ -1326,72 +1683,6 @@ build_xray_config() {
     return 1
   fi
 
-  [ "$XRAY_SNIFFING_ENABLED" = 1 ] && build_sniffing=true || build_sniffing=false
-  [ "$XRAY_SNIFFING_ROUTE_ONLY" = 1 ] && build_route_only=true || build_route_only=false
-  jq -e '(.fakeDns? != null) or (.fakedns? != null)' "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1 && build_fakedns=true || build_fakedns=false
-  if ! jq -n --arg log_level "$LOG_LEVEL" --arg error "$XRAY_LOG_ERROR" --arg access "$XRAY_LOG_ACCESS" \
-        --argjson dns_log "$XRAY_LOG_DNS" --argjson mask_address "$XRAY_LOG_MASK_ADDRESS" \
-        '{log: ({loglevel: $log_level, dnsLog: ($dns_log == 1), maskAddress: (if $mask_address == 1 then "quarter" else "" end)}
-                + (if $error == "" then {} else {error: $error} end)
-                + (if $access == "" then {} else {access: $access} end))}' > "$BUILD_CANDIDATE_DIR/80-container-log.json" ||
-     ! jq -n \
-       --arg listener_mode "$build_listener_mode" \
-       --argjson redir_port "$REDIR_PORT" \
-       --argjson tproxy_port "$TPROXY_PORT" \
-       --argjson sniffing_enabled "$build_sniffing" \
-       --argjson route_only "$build_route_only" \
-       --argjson fakedns "$build_fakedns" \
-       --argjson inherited "$build_source_sniffing" \
-       --arg excluded "$(b64_decode "$XRAY_SNIFFING_EXCLUDE_B64")" \
-       --argjson socks_enabled "$LOCAL_SOCKS_ENABLED" \
-       --argjson socks_port "$LOCAL_SOCKS_PORT" \
-       --arg socks_user "$(b64_decode "$LOCAL_SOCKS_USER_B64")" \
-       --arg socks_pass "$(b64_decode "$LOCAL_SOCKS_PASS_B64")" \
-       --argjson http_enabled "$LOCAL_HTTP_ENABLED" \
-       --argjson http_port "$LOCAL_HTTP_PORT" \
-       --arg http_user "$(b64_decode "$LOCAL_HTTP_USER_B64")" \
-       --arg http_pass "$(b64_decode "$LOCAL_HTTP_PASS_B64")" '
-       # Список уже очищен от пробелов при сохранении: регулярных выражений в jq
-       # сборки для armv5 нет.
-       ($excluded | split("\n") | map(select(length > 0))) as $own_excluded |
-       def own_sniffing: {
-         enabled:$sniffing_enabled,
-         destOverride:(["http","tls","quic"] + (if $fakedns then ["fakedns"] else [] end)),
-         metadataOnly:false,
-         routeOnly:$route_only
-       } + (if ($own_excluded | length) > 0 then {domainsExcluded:$own_excluded} else {} end);
-       def managed_sniffing: if ($inherited | type) == "object" then $inherited else own_sniffing end;
-       (if $socks_enabled == 1 then [
-         {tag:"xray-remnasub-socks",port:$socks_port,protocol:"socks",
-          settings:({udp:true} + (if $socks_user == "" then {auth:"noauth"}
-                                  else {auth:"password",accounts:[{user:$socks_user,pass:$socks_pass}]} end)),
-          sniffing:managed_sniffing}
-       ] else [] end) as $socks_inbound |
-       (if $http_enabled == 1 then [
-         {tag:"xray-remnasub-http",port:$http_port,protocol:"http",
-          settings:(if $http_user == "" then {}
-                    else {accounts:[{user:$http_user,pass:$http_pass}]} end),
-          sniffing:managed_sniffing}
-       ] else [] end) as $http_inbound |
-       {inbounds:($socks_inbound + $http_inbound + if $listener_mode == "tproxy" then [
-         {tag:"xray-remnasub-tproxy",port:$tproxy_port,protocol:"dokodemo-door",settings:{network:"tcp,udp",followRedirect:true},streamSettings:{sockopt:{tproxy:"tproxy"}},sniffing:managed_sniffing}
-       ] elif $listener_mode == "redir-tproxy" then [
-         {tag:"xray-remnasub-tcp",port:$redir_port,protocol:"dokodemo-door",settings:{network:"tcp",followRedirect:true},streamSettings:{sockopt:{tproxy:"redirect"}},sniffing:managed_sniffing},
-         {tag:"xray-remnasub-udp",port:$tproxy_port,protocol:"dokodemo-door",settings:{network:"udp",followRedirect:true},streamSettings:{sockopt:{tproxy:"tproxy"}},sniffing:managed_sniffing}
-       ] else [
-         {tag:"xray-remnasub-tcp",port:$redir_port,protocol:"dokodemo-door",settings:{network:"tcp",followRedirect:true},streamSettings:{sockopt:{tproxy:"redirect"}},sniffing:managed_sniffing},
-         {tag:"xray-remnasub-tun",protocol:"tun",settings:{name:"Xray",MTU:1500,gateway:["100.64.0.1/32"]},sniffing:managed_sniffing}
-       ] end)}
-     ' > "$BUILD_CANDIDATE_DIR/90-container-inbounds.json"; then
-    BUILD_ERROR='Could not assemble RouterOS configuration overlay'
-    discard_build_candidate
-    return 1
-  fi
-  if [ -n "$build_source_sniffing_from" ]; then
-    build_event INFO "$build_id" "sniffing settings taken from source inbound $build_source_sniffing_from"
-  elif [ "$XRAY_SNIFFING_INHERIT" = 1 ]; then
-    build_event INFO "$build_id" 'source inbounds carry no sniffing settings; container settings are used'
-  fi
   chmod 700 "$BUILD_CANDIDATE_DIR" "$build_metadata" 2>/dev/null || true
   chmod 600 "$BUILD_CANDIDATE_DIR/10-subscription.json" "$BUILD_CANDIDATE_DIR/70-container-geodata-tail.json" "$BUILD_CANDIDATE_DIR/80-container-log.json" "$BUILD_CANDIDATE_DIR/90-container-inbounds.json" "$build_metadata/configs.json" "$build_metadata/geodata.json" "$build_metadata/listener.json" "$build_metadata/source.sha256" 2>/dev/null || true
 

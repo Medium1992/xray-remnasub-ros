@@ -427,6 +427,11 @@ EOF
     --argjson xray_sniffing_enabled "$XRAY_SNIFFING_ENABLED" --argjson xray_sniffing_route_only "$XRAY_SNIFFING_ROUTE_ONLY" \
     --argjson xray_sniffing_inherit "$XRAY_SNIFFING_INHERIT" --arg xray_sniffing_excluded "$(b64_decode "$XRAY_SNIFFING_EXCLUDE_B64")" \
     --arg default_hwid "$DEFAULT_HWID" \
+    --argjson dns_inbound_enabled "$DNS_INBOUND_ENABLED" --argjson dns_inbound_port "$DNS_INBOUND_PORT" --argjson fakedns_guard_enabled "$FAKEDNS_GUARD_ENABLED" \
+    --arg xray_sniffing_dest "$XRAY_SNIFFING_DEST" --argjson xray_sniffing_metadata_only "$XRAY_SNIFFING_METADATA_ONLY" \
+    --arg xray_sniffing_excluded_ips "$(b64_decode "$XRAY_SNIFFING_EXCLUDE_IPS_B64")" \
+    --argjson tun_mtu "$TUN_MTU" --arg dns_inbound_listen "$DNS_INBOUND_LISTEN" \
+    --arg local_socks_listen "$LOCAL_SOCKS_LISTEN" --arg local_http_listen "$LOCAL_HTTP_LISTEN" \
     --argjson inbound_strip_socks "$INBOUND_STRIP_SOCKS" --argjson inbound_strip_http "$INBOUND_STRIP_HTTP" \
     --argjson local_socks_enabled "$LOCAL_SOCKS_ENABLED" --argjson local_socks_port "$LOCAL_SOCKS_PORT" \
     --arg local_socks_user "$(b64_decode "$LOCAL_SOCKS_USER_B64")" --argjson local_socks_has_pass "$status_socks_has_pass" \
@@ -445,7 +450,7 @@ EOF
     --arg routing_rules "$(b64_decode "$ROUTING_RULES_B64")" \
     --argjson extra_outbounds_enabled "$EXTRA_OUTBOUNDS_ENABLED" --arg extra_outbounds "$(b64_decode "$EXTRA_OUTBOUNDS_B64")" \
     --arg ui_theme "$UI_THEME" --arg ui_accent "$UI_ACCENT" \
-    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,network_tcp_notsent_lowat:$network_tcp_notsent_lowat,network_tcp_slow_start_after_idle:$network_tcp_slow_start_after_idle,network_tcp_mtu_probing:$network_tcp_mtu_probing,network_tcp_fin_timeout:$network_tcp_fin_timeout,network_tcp_congestion:$network_tcp_congestion,network_tcp_buffer_max:$network_tcp_buffer_max,tcp_congestion_available:$tcp_congestion_available,sysctl:{notsent_lowat:$sysctl_notsent_lowat,slow_start_after_idle:$sysctl_slow_start_after_idle,mtu_probing:$sysctl_mtu_probing,fin_timeout:$sysctl_fin_timeout,congestion:$sysctl_congestion,buffer_rmem:$sysctl_buffer_rmem,buffer_wmem:$sysctl_buffer_wmem},xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,xray_sniffing_inherit:$xray_sniffing_inherit,xray_sniffing_excluded:$xray_sniffing_excluded,default_hwid:$default_hwid,inbound_strip_socks:$inbound_strip_socks,dns_override_enabled:$dns_override_enabled,dns_override:$dns_override,routing_rules_enabled:$routing_rules_enabled,routing_rules_position:$routing_rules_position,routing_rules:$routing_rules,extra_outbounds_enabled:$extra_outbounds_enabled,extra_outbounds:$extra_outbounds,inbound_strip_http:$inbound_strip_http,local_socks_enabled:$local_socks_enabled,local_socks_port:$local_socks_port,local_socks_user:$local_socks_user,local_socks_has_pass:$local_socks_has_pass,local_http_enabled:$local_http_enabled,local_http_port:$local_http_port,local_http_user:$local_http_user,local_http_has_pass:$local_http_has_pass,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,failover_enabled:$failover_enabled,failover_interval_seconds:$failover_interval_seconds,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,core_state:$core_state,core_exit_code:$core_exit_code,core_fast_fails:$core_fast_fails,core_retry_in:$core_retry_in,core_updated_at:$core_updated_at,core_reason_b64:$core_reason_b64,core_log_present:$core_log_present,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version}'
+    '{ok:true,ui_theme:$ui_theme,ui_accent:$ui_accent,profiles:($profiles[0] // []),configs:($configs[0] // []),probes:($probes[0] // {}),active_profile_id:$active,run_enabled:$run_enabled,running:$running,listener_mode:$listener_mode,effective_listener_mode:$effective_listener_mode,redir_port:$redir,tproxy_port:$tproxy,log_level:$log_level,xray_log_error:$xray_log_error,xray_log_access:$xray_log_access,xray_log_dns:$xray_log_dns,xray_log_mask_address:$xray_log_mask_address,global_headers_b64:$global_headers_b64,network_qdisc:$network_qdisc,network_disable_ipv6:$network_disable_ipv6,network_disable_multicast:$network_disable_multicast,network_ct_established:$network_ct_established,network_ct_syn_sent:$network_ct_syn_sent,network_ct_syn_recv:$network_ct_syn_recv,network_ct_fin_wait:$network_ct_fin_wait,network_ct_close_wait:$network_ct_close_wait,network_ct_last_ack:$network_ct_last_ack,network_ct_time_wait:$network_ct_time_wait,network_ct_close:$network_ct_close,network_ct_unacknowledged:$network_ct_unacknowledged,network_ct_udp_stream:$network_ct_udp_stream,network_tcp_notsent_lowat:$network_tcp_notsent_lowat,network_tcp_slow_start_after_idle:$network_tcp_slow_start_after_idle,network_tcp_mtu_probing:$network_tcp_mtu_probing,network_tcp_fin_timeout:$network_tcp_fin_timeout,network_tcp_congestion:$network_tcp_congestion,network_tcp_buffer_max:$network_tcp_buffer_max,tcp_congestion_available:$tcp_congestion_available,sysctl:{notsent_lowat:$sysctl_notsent_lowat,slow_start_after_idle:$sysctl_slow_start_after_idle,mtu_probing:$sysctl_mtu_probing,fin_timeout:$sysctl_fin_timeout,congestion:$sysctl_congestion,buffer_rmem:$sysctl_buffer_rmem,buffer_wmem:$sysctl_buffer_wmem},xray_sniffing_enabled:$xray_sniffing_enabled,xray_sniffing_route_only:$xray_sniffing_route_only,xray_sniffing_inherit:$xray_sniffing_inherit,xray_sniffing_excluded:$xray_sniffing_excluded,default_hwid:$default_hwid,dns_inbound_enabled:$dns_inbound_enabled,dns_inbound_port:$dns_inbound_port,fakedns_guard_enabled:$fakedns_guard_enabled,xray_sniffing_dest:(if $xray_sniffing_dest == "none" then [] else ($xray_sniffing_dest | split(":")) end),xray_sniffing_metadata_only:$xray_sniffing_metadata_only,xray_sniffing_excluded_ips:$xray_sniffing_excluded_ips,tun_mtu:$tun_mtu,dns_inbound_listen:$dns_inbound_listen,local_socks_listen:$local_socks_listen,local_http_listen:$local_http_listen,inbound_strip_socks:$inbound_strip_socks,dns_override_enabled:$dns_override_enabled,dns_override:$dns_override,routing_rules_enabled:$routing_rules_enabled,routing_rules_position:$routing_rules_position,routing_rules:$routing_rules,extra_outbounds_enabled:$extra_outbounds_enabled,extra_outbounds:$extra_outbounds,inbound_strip_http:$inbound_strip_http,local_socks_enabled:$local_socks_enabled,local_socks_port:$local_socks_port,local_socks_user:$local_socks_user,local_socks_has_pass:$local_socks_has_pass,local_http_enabled:$local_http_enabled,local_http_port:$local_http_port,local_http_user:$local_http_user,local_http_has_pass:$local_http_has_pass,xray_probe_url:$xray_probe_url,xray_probe_timeout_seconds:$xray_probe_timeout_seconds,xray_probe_http_method:$xray_probe_http_method,failover_enabled:$failover_enabled,failover_interval_seconds:$failover_interval_seconds,geodata_storage:$geodata_storage,geodata_asset_dir:$geodata_asset_dir,geodata_asset_count:$geodata_asset_count,geodata_total_bytes:$geodata_total_bytes,geodata_last_update:$geodata_last_update,geodata_warning:$geodata_warning,core_state:$core_state,core_exit_code:$core_exit_code,core_fast_fails:$core_fast_fails,core_retry_in:$core_retry_in,core_updated_at:$core_updated_at,core_reason_b64:$core_reason_b64,core_log_present:$core_log_present,firewall_backend:$backend,active_interface:$active_interface,active_interface_cidr:$active_interface_cidr,version:$version}'
   status_result=$?
   rm -f "$status_profiles"
   rm -f "$status_configs"
@@ -1343,7 +1348,7 @@ EOF
     state_lock || reply_error 'Could not lock container state'
     load_settings
     old_global_headers=$GLOBAL_HEADERS_B64
-    old_runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$XRAY_SNIFFING_INHERIT:$XRAY_SNIFFING_EXCLUDE_B64:$GEODATA_STORAGE:$DNS_OVERRIDE_ENABLED:$DNS_OVERRIDE_B64:$ROUTING_RULES_ENABLED:$ROUTING_RULES_POSITION:$ROUTING_RULES_B64:$EXTRA_OUTBOUNDS_ENABLED:$EXTRA_OUTBOUNDS_B64:$INBOUND_STRIP_SOCKS:$INBOUND_STRIP_HTTP:$LOCAL_SOCKS_ENABLED:$LOCAL_SOCKS_PORT:$LOCAL_SOCKS_USER_B64:$LOCAL_SOCKS_PASS_B64:$LOCAL_HTTP_ENABLED:$LOCAL_HTTP_PORT:$LOCAL_HTTP_USER_B64:$LOCAL_HTTP_PASS_B64:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS
+    old_runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$XRAY_SNIFFING_INHERIT:$XRAY_SNIFFING_EXCLUDE_B64:$GEODATA_STORAGE:$DNS_OVERRIDE_ENABLED:$DNS_OVERRIDE_B64:$ROUTING_RULES_ENABLED:$ROUTING_RULES_POSITION:$ROUTING_RULES_B64:$EXTRA_OUTBOUNDS_ENABLED:$EXTRA_OUTBOUNDS_B64:$INBOUND_STRIP_SOCKS:$INBOUND_STRIP_HTTP:$LOCAL_SOCKS_ENABLED:$LOCAL_SOCKS_PORT:$LOCAL_SOCKS_USER_B64:$LOCAL_SOCKS_PASS_B64:$LOCAL_HTTP_ENABLED:$LOCAL_HTTP_PORT:$LOCAL_HTTP_USER_B64:$LOCAL_HTTP_PASS_B64:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS:$DNS_INBOUND_ENABLED:$DNS_INBOUND_PORT:$FAKEDNS_GUARD_ENABLED:$XRAY_SNIFFING_DEST:$XRAY_SNIFFING_METADATA_ONLY:$XRAY_SNIFFING_EXCLUDE_IPS_B64:$TUN_MTU:$DNS_INBOUND_LISTEN:$LOCAL_SOCKS_LISTEN:$LOCAL_HTTP_LISTEN
     LISTENER_MODE=$(form_value listener_mode); REDIR_PORT=$(form_value redir_port); TPROXY_PORT=$(form_value tproxy_port)
     LOG_LEVEL=$(form_value log_level)
     value=$(form_value xray_log_error); [ -z "$value" ] || XRAY_LOG_ERROR=$value
@@ -1394,6 +1399,15 @@ EOF
     LOCAL_SOCKS_ENABLED=$(form_value local_socks_enabled); LOCAL_HTTP_ENABLED=$(form_value local_http_enabled)
     case "$LOCAL_SOCKS_ENABLED" in 1) ;; *) LOCAL_SOCKS_ENABLED=0 ;; esac
     case "$LOCAL_HTTP_ENABLED" in 1) ;; *) LOCAL_HTTP_ENABLED=0 ;; esac
+    # Нет поля — значение не трогаем: страница панели, открытая до появления
+    # переключателя, иначе молча выключила бы его при сохранении.
+    value=$(form_value fakedns_guard_enabled); case "$value" in 0|1) FAKEDNS_GUARD_ENABLED=$value ;; esac
+    value=$(form_value dns_inbound_enabled); case "$value" in 0|1) DNS_INBOUND_ENABLED=$value ;; esac
+    value=$(form_value dns_inbound_port); [ -z "$value" ] || DNS_INBOUND_PORT=$value
+    value=$(form_value tun_mtu); [ -z "$value" ] || TUN_MTU=$value
+    value=$(form_value dns_inbound_listen); [ -z "$value" ] || DNS_INBOUND_LISTEN=$value
+    value=$(form_value local_socks_listen); [ -z "$value" ] || LOCAL_SOCKS_LISTEN=$value
+    value=$(form_value local_http_listen); [ -z "$value" ] || LOCAL_HTTP_LISTEN=$value
     value=$(form_value local_socks_port); [ -z "$value" ] || LOCAL_SOCKS_PORT=$value
     value=$(form_value local_http_port); [ -z "$value" ] || LOCAL_HTTP_PORT=$value
     LOCAL_SOCKS_USER_B64=$(b64_encode "$(form_value local_socks_user)")
@@ -1440,17 +1454,37 @@ EOF
     value=$(form_value xray_sniffing_route_only); [ -z "$value" ] || XRAY_SNIFFING_ROUTE_ONLY=$value
     value=$(form_value xray_sniffing_inherit); [ -z "$value" ] || XRAY_SNIFFING_INHERIT=$value
     case "$XRAY_SNIFFING_INHERIT" in 0|1) ;; *) reply_error 'Invalid sniffing settings' ;; esac
-    if [ "$(form_value xray_sniffing_excluded_present)" = 1 ]; then
-      # По записи на строку, без пробелов по краям и пустых строк: в таком виде
-      # список и уходит в domainsExcluded.
-      sniffing_excluded=$(form_value xray_sniffing_excluded | tr -d '\r' | awk '
+    value=$(form_value xray_sniffing_metadata_only); case "$value" in 0|1) XRAY_SNIFFING_METADATA_ONLY=$value ;; esac
+    if [ "$(form_value xray_sniffing_dest_present)" = 1 ]; then
+      value=$(form_value xray_sniffing_dest)
+      for sniffing_dest in $(printf '%s' "$value" | tr ',' ' '); do
+        case "$sniffing_dest" in http|tls|quic) ;; *) reply_error 'Invalid sniffing destOverride' ;; esac
+      done
+      XRAY_SNIFFING_DEST=$(printf '%s' "$value" | tr ',' '\n' |
+        awk '$0 == "http" || $0 == "tls" || $0 == "quic" { if (!seen[$0]++) out = out (out == "" ? "" : ":") $0 }
+             END { print (out == "" ? "none" : out) }')
+    fi
+    # По записи на строку, без пробелов по краям и пустых строк: в таком виде
+    # списки и уходят в domainsExcluded и ipsExcluded.
+    # Не в подоболочке: reply_error должен завершить сам запрос.
+    sniffing_list() {
+      sniffing_list_value=$(form_value "$1" | tr -d '\r' | awk '
         {gsub(/^[[:space:]]+|[[:space:]]+$/, "")}
         length($0) > 0 {print}')
-      [ "${#sniffing_excluded}" -le 8192 ] || reply_error 'Sniffing exclusion list is too large (8 KiB maximum)'
-      if printf '%s\n' "$sniffing_excluded" | awk 'length($0) > 255 {bad = 1} END {exit !bad}'; then
-        reply_error 'A sniffing exclusion is longer than 255 characters'
+      [ "${#sniffing_list_value}" -le 8192 ] || reply_error "$2 is too large (8 KiB maximum)"
+      if printf '%s\n' "$sniffing_list_value" | awk 'length($0) > 255 {bad = 1} END {exit !bad}'; then
+        reply_error "An entry in $2 is longer than 255 characters"
       fi
-      XRAY_SNIFFING_EXCLUDE_B64=$(b64_encode "$sniffing_excluded")
+    }
+    if [ "$(form_value xray_sniffing_excluded_present)" = 1 ]; then
+      sniffing_list xray_sniffing_excluded 'Sniffing domain exclusion list'
+      XRAY_SNIFFING_EXCLUDE_B64=$(b64_encode "$sniffing_list_value")
+    fi
+    if [ "$(form_value xray_sniffing_excluded_ips_present)" = 1 ]; then
+      sniffing_list xray_sniffing_excluded_ips 'Sniffing IP exclusion list'
+      # Адрес, сеть или ссылка на геобазу — без пробелов внутри.
+      case "$sniffing_list_value" in *' '*|*'	'*) reply_error 'Sniffing IP exclusions must not contain spaces' ;; esac
+      XRAY_SNIFFING_EXCLUDE_IPS_B64=$(b64_encode "$sniffing_list_value")
     fi
     probe_url=$(form_value xray_probe_url)
     XRAY_PROBE_TIMEOUT_SECONDS=$(form_value xray_probe_timeout_seconds)
@@ -1476,6 +1510,20 @@ EOF
     done
     [ "$LOCAL_SOCKS_ENABLED" = 0 ] || [ "$LOCAL_HTTP_ENABLED" = 0 ] || [ "$LOCAL_SOCKS_PORT" != "$LOCAL_HTTP_PORT" ] ||
       reply_error 'Local SOCKS and HTTP ports must differ'
+    valid_number "$DNS_INBOUND_PORT" && [ "$DNS_INBOUND_PORT" -ge 1 ] && [ "$DNS_INBOUND_PORT" -le 65535 ] || reply_error 'Invalid DNS port'
+    valid_number "$TUN_MTU" && [ "$TUN_MTU" -ge 576 ] && [ "$TUN_MTU" -le 9000 ] || reply_error 'TUN MTU must be 576..9000'
+    valid_listen_address "$DNS_INBOUND_LISTEN" || reply_error 'DNS listen address must be an IPv4 or IPv6 address'
+    valid_listen_address "$LOCAL_SOCKS_LISTEN" || reply_error 'SOCKS listen address must be an IPv4 or IPv6 address'
+    valid_listen_address "$LOCAL_HTTP_LISTEN" || reply_error 'HTTP listen address must be an IPv4 or IPv6 address'
+    if [ "$DNS_INBOUND_ENABLED" = 1 ]; then
+      for occupied_port in "$REDIR_PORT" "$TPROXY_PORT" 80; do
+        [ "$DNS_INBOUND_PORT" != "$occupied_port" ] || reply_error "DNS port $DNS_INBOUND_PORT is already used by the container"
+      done
+      [ "$LOCAL_SOCKS_ENABLED" = 0 ] || [ "$LOCAL_SOCKS_PORT" != "$DNS_INBOUND_PORT" ] ||
+        reply_error "Local SOCKS port $LOCAL_SOCKS_PORT is already used by the DNS inbound"
+      [ "$LOCAL_HTTP_ENABLED" = 0 ] || [ "$LOCAL_HTTP_PORT" != "$DNS_INBOUND_PORT" ] ||
+        reply_error "Local HTTP port $LOCAL_HTTP_PORT is already used by the DNS inbound"
+    fi
     case "$LOG_LEVEL" in none|debug|info|warning|error) ;; *) reply_error 'Invalid log level' ;; esac
     case "$NETWORK_QDISC" in system|fq_codel|cake|codel|sfq|pfifo|bfifo) ;; *) reply_error 'Invalid qdisc' ;; esac
     case "$NETWORK_DISABLE_IPV6" in 0|1) ;; *) NETWORK_DISABLE_IPV6=1 ;; esac
@@ -1512,7 +1560,7 @@ EOF
     valid_theme "$UI_THEME" || reply_error 'Invalid interface theme'
     [ -z "$UI_ACCENT" ] || valid_accent "$UI_ACCENT" || reply_error 'Accent colour must be #rrggbb'
     XRAY_PROBE_URL_B64=$(b64_encode "$probe_url")
-    runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$XRAY_SNIFFING_INHERIT:$XRAY_SNIFFING_EXCLUDE_B64:$GEODATA_STORAGE:$DNS_OVERRIDE_ENABLED:$DNS_OVERRIDE_B64:$ROUTING_RULES_ENABLED:$ROUTING_RULES_POSITION:$ROUTING_RULES_B64:$EXTRA_OUTBOUNDS_ENABLED:$EXTRA_OUTBOUNDS_B64:$INBOUND_STRIP_SOCKS:$INBOUND_STRIP_HTTP:$LOCAL_SOCKS_ENABLED:$LOCAL_SOCKS_PORT:$LOCAL_SOCKS_USER_B64:$LOCAL_SOCKS_PASS_B64:$LOCAL_HTTP_ENABLED:$LOCAL_HTTP_PORT:$LOCAL_HTTP_USER_B64:$LOCAL_HTTP_PASS_B64:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS
+    runtime_signature=$LISTENER_MODE:$REDIR_PORT:$TPROXY_PORT:$LOG_LEVEL:$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY:$XRAY_SNIFFING_INHERIT:$XRAY_SNIFFING_EXCLUDE_B64:$GEODATA_STORAGE:$DNS_OVERRIDE_ENABLED:$DNS_OVERRIDE_B64:$ROUTING_RULES_ENABLED:$ROUTING_RULES_POSITION:$ROUTING_RULES_B64:$EXTRA_OUTBOUNDS_ENABLED:$EXTRA_OUTBOUNDS_B64:$INBOUND_STRIP_SOCKS:$INBOUND_STRIP_HTTP:$LOCAL_SOCKS_ENABLED:$LOCAL_SOCKS_PORT:$LOCAL_SOCKS_USER_B64:$LOCAL_SOCKS_PASS_B64:$LOCAL_HTTP_ENABLED:$LOCAL_HTTP_PORT:$LOCAL_HTTP_USER_B64:$LOCAL_HTTP_PASS_B64:$XRAY_LOG_ERROR:$XRAY_LOG_ACCESS:$XRAY_LOG_DNS:$XRAY_LOG_MASK_ADDRESS:$DNS_INBOUND_ENABLED:$DNS_INBOUND_PORT:$FAKEDNS_GUARD_ENABLED:$XRAY_SNIFFING_DEST:$XRAY_SNIFFING_METADATA_ONLY:$XRAY_SNIFFING_EXCLUDE_IPS_B64:$TUN_MTU:$DNS_INBOUND_LISTEN:$LOCAL_SOCKS_LISTEN:$LOCAL_HTTP_LISTEN
     write_state || reply_error 'Could not save container settings'
     network_settings_error=
     if ! apply_kernel_settings > "$RUNTIME_DIR/network-settings.log" 2>&1; then

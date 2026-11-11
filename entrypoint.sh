@@ -57,6 +57,11 @@ initialize_storage() {
     NETWORK_TCP_NOTSENT_LOWAT=131072 NETWORK_TCP_SLOW_START_AFTER_IDLE=0 NETWORK_TCP_MTU_PROBING=1
     NETWORK_TCP_FIN_TIMEOUT=30 NETWORK_TCP_CONGESTION=system NETWORK_TCP_BUFFER_MAX=system
     XRAY_SNIFFING_ENABLED=1 XRAY_SNIFFING_ROUTE_ONLY=1
+    XRAY_SNIFFING_INHERIT=1 XRAY_SNIFFING_EXCLUDE_B64=
+    # Свой x-hwid у каждой установки: с общим значением все роутеры одного
+    # пользователя выглядели для провайдера одним устройством.
+    DEFAULT_HWID=RouterOS-$(openssl rand -hex 8 2>/dev/null || true)
+    [ "${#DEFAULT_HWID}" -eq 25 ] || DEFAULT_HWID=RouterOS-Solomon
     DNS_OVERRIDE_ENABLED=0 DNS_OVERRIDE_B64=
     ROUTING_RULES_ENABLED=0 ROUTING_RULES_POSITION=before ROUTING_RULES_B64=
     EXTRA_OUTBOUNDS_ENABLED=0 EXTRA_OUTBOUNDS_B64=
@@ -89,7 +94,7 @@ effective_headers() {
   load_settings
   header_global=$RUNTIME_DIR/request-global.$$.headers
   header_local=$RUNTIME_DIR/request-local.$$.headers
-  b64_decode "$GLOBAL_HEADERS_B64" | awk '
+  b64_decode "$GLOBAL_HEADERS_B64" | awk -v default_hwid="$DEFAULT_HWID" '
     BEGIN {
       count=5
       order[1]="x-hwid"
@@ -97,7 +102,7 @@ effective_headers() {
       order[3]="x-ver-os"
       order[4]="x-device-model"
       order[5]="user-agent"
-      fallback["x-hwid"]="RouterOS-Solomon"
+      fallback["x-hwid"]=default_hwid
       fallback["x-device-os"]="RouterOS"
       fallback["x-ver-os"]="7"
       fallback["x-device-model"]="MikroTik"
@@ -193,6 +198,7 @@ fetch_profile() {
   FETCH_HTTP_STATUS=
   FETCH_HTTP_LINE=
   FETCH_BYTES=0
+  FETCH_SHA256=
   fetch_profile_file=$(profile_path "$fetch_id") || return 1
   fetch_url=$(b64_decode "$(state_get "$fetch_profile_file" URL_B64)")
   fetch_timeout=$(state_get "$fetch_profile_file" TIMEOUT_SECONDS 30)
@@ -201,8 +207,10 @@ fetch_profile() {
   fetch_tmp=$RUNTIME_DIR/$fetch_id.download.$$.json
   fetch_log=$RUNTIME_DIR/$fetch_id.download.$$.log
   set -- -S -T "$fetch_timeout" -O "$fetch_tmp"
+  fetch_sent_headers=
   while IFS= read -r header; do
     [ -n "$header" ] || continue
+    fetch_sent_headers="${fetch_sent_headers:+$fetch_sent_headers; }$header"
     header_name=${header%%:*}
     header_value=${header#*:}
     header_value=$(printf '%s' "$header_value" | sed 's/^[[:space:]]*//')
@@ -214,14 +222,34 @@ fetch_profile() {
 $(effective_headers "$fetch_profile_file")
 EOF
   [ "$fetch_insecure" = 1 ] && set -- "$@" --no-check-certificate
+  # В журнал уходит ровно то, что получит провайдер: ответ Remnawave зависит от
+  # заголовков, и без этой строки «почему пришло не то» не разобрать — её можно
+  # один в один повторить через curl -H.
+  event_log INFO "$fetch_id" "request headers: ${fetch_sent_headers:-(none)}"
   fetch_policy_status=
+  fetch_denied_file=$STATUS_DIR/$fetch_id.denied
   if ! (ulimit -f 32770; exec wget "$@" "$fetch_url") 2> "$fetch_log"; then
     fetch_policy_status=$(response_status "$fetch_log")
     FETCH_HTTP_STATUS=$fetch_policy_status
     FETCH_HTTP_LINE=$(response_status_line "$fetch_log")
     [ ! -f "$fetch_tmp" ] || FETCH_BYTES=$(wc -c < "$fetch_tmp")
     case "$fetch_policy_status" in
-      401|403|404|410|451) printf '[]\n' > "$fetch_tmp" ;;
+      401|403|404|410|451)
+        # Один отказ ещё не значит, что подписку отозвали: так же выглядят
+        # разовый 403 от защиты перед панелью и её короткий сбой. Работающую
+        # конфигурацию снимаем только после третьего отказа подряд; повторы
+        # при этом идут раз в пять минут, а не по интервалу обновления.
+        fetch_denied=$(cat "$fetch_denied_file" 2>/dev/null || printf 0)
+        valid_number "$fetch_denied" || fetch_denied=0
+        fetch_denied=$((fetch_denied + 1))
+        printf '%s\n' "$fetch_denied" > "$fetch_denied_file" 2>/dev/null || true
+        if [ "$fetch_denied" -lt 3 ] && profile_runtime_dir "$fetch_id" >/dev/null 2>&1; then
+          FETCH_ERROR="Subscription access denied (HTTP $fetch_policy_status), refusal $fetch_denied of 3 in a row; the working configuration is kept until the third one"
+          rm -f "$fetch_tmp" "$fetch_log"
+          return 1
+        fi
+        printf '[]\n' > "$fetch_tmp"
+        ;;
       *)
         if [ "${FETCH_BYTES:-0}" -ge 16777216 ]; then FETCH_ERROR='Subscription is larger than 16 MiB'; else FETCH_ERROR=$(tail -n 2 "$fetch_log" | tr '\n' ' ' | head -c 2048); fi
         rm -f "$fetch_tmp" "$fetch_log"
@@ -229,11 +257,13 @@ EOF
         ;;
       esac
   fi
+  [ -n "$fetch_policy_status" ] || rm -f "$fetch_denied_file"
   [ -n "$FETCH_HTTP_STATUS" ] || FETCH_HTTP_STATUS=$(response_status "$fetch_log")
   [ -n "$FETCH_HTTP_STATUS" ] || FETCH_HTTP_STATUS=200
   [ -n "$FETCH_HTTP_LINE" ] || FETCH_HTTP_LINE=$(response_status_line "$fetch_log")
   fetch_size=$(wc -c < "$fetch_tmp")
   FETCH_BYTES=$fetch_size
+  FETCH_SHA256=$(sha256sum "$fetch_tmp" 2>/dev/null | cut -c1-16)
   if [ "$fetch_size" -gt 16777216 ]; then
     FETCH_ERROR='Subscription is larger than 16 MiB'
     rm -f "$fetch_tmp" "$fetch_log"
@@ -323,6 +353,7 @@ EOF
 # не профильная: работа, числящаяся за профилем, заставила бы supervisor снять
 # правила перехвата на время проверки.
 process_checks() {
+  adopt_self_pid
   while :; do
     for request in "$CHECKS_DIR"/c-*.request; do
       [ -f "$request" ] || continue
@@ -358,8 +389,9 @@ process_checks() {
         discard_build_candidate
         printf 'STATE=%s\nMESSAGE_B64=%s\nVALIDATION_B64=%s\nAT=%s\n' \
           "$check_state" "$(b64_encode "$check_message")" \
-          "$(b64_encode "$(tail -c 4096 "$RUNTIME_DIR/$check_id.validation.log" 2>/dev/null || true)")" \
+          "$(b64_encode "$(tail -c 4096 "$RUNTIME_DIR/$check_id.check-validation.log" 2>/dev/null || true)")" \
           "$(date +%s)" > "$result.tmp" && mv "$result.tmp" "$result" || rm -f "$result.tmp"
+        rm -f "$RUNTIME_DIR/$check_id.check-validation.log"
       )
       rm -f "$request"
     done
@@ -377,6 +409,7 @@ process_checks() {
 }
 
 process_jobs() {
+  adopt_self_pid
   while :; do
     for job in "$JOBS_DIR"/p-*.job; do
       [ -f "$job" ] || continue
@@ -403,7 +436,7 @@ process_jobs() {
       event_log INFO "$id" "$action started"
       if [ "$action" != fetch ] || fetch_profile "$id"; then
         if [ "$action" = fetch ]; then
-          event_log INFO "$id" "subscription downloaded: HTTP ${FETCH_HTTP_STATUS:-?}, ${FETCH_BYTES:-0} bytes"
+          event_log INFO "$id" "subscription downloaded: HTTP ${FETCH_HTTP_STATUS:-?}, ${FETCH_BYTES:-0} bytes, sha256 ${FETCH_SHA256:-?}"
           set_status "$id" working 'Проверка подписки' validation "$action" "$job_started" 0 \
             "$FETCH_HTTP_STATUS" "$FETCH_HTTP_LINE" "$FETCH_BYTES"
           BUILD_SOURCE_OVERRIDE=$FETCH_CANDIDATE
@@ -545,6 +578,7 @@ process_jobs() {
 }
 
 refresh_worker() {
+  adopt_self_pid
   while :; do
     now=$(date +%s)
     for profile in "$PROFILES_DIR"/p-*.conf; do
@@ -568,6 +602,11 @@ EOF
       fi
       valid_number "$interval" || interval=3600
       valid_number "$fetched" || fetched=0
+      # Провайдер отказал, но рабочая конфигурация пока оставлена: перепроверяем
+      # быстро, чтобы отозванная подписка не жила ещё несколько интервалов.
+      case "$(cat "$STATUS_DIR/$id.denied" 2>/dev/null || true)" in
+        1|2) [ "$interval" -le 300 ] || interval=300 ;;
+      esac
       { read -r refresh_state
         read -r refresh_action
         read -r refresh_finished
@@ -1050,8 +1089,14 @@ supervisor() {
     done
     if [ "$xray_ready" != 1 ]; then
       ready_reason=$(core_exit_reason)
-      event_log ERROR "$ACTIVE_PROFILE_ID" \
-        "Xray did not start listening on port $xray_ready_port${ready_reason:+: $ready_reason}"
+      # Ядро мог остановить сам контейнер: новая конфигурация пришла, пока
+      # прежняя ещё поднималась. Это не отказ ядра, и в журнале ему не место.
+      if [ "$STOPPING" = 1 ] || [ "$RESTART_REQUESTED" = 1 ]; then
+        event_log INFO "$ACTIVE_PROFILE_ID" 'Xray start interrupted by a newer configuration'
+      else
+        event_log ERROR "$ACTIVE_PROFILE_ID" \
+          "Xray did not start listening on port $xray_ready_port${ready_reason:+: $ready_reason}"
+      fi
       kill -0 "$XRAY_PID" 2>/dev/null && terminate_xray "$XRAY_PID"
       wait "$XRAY_PID" || true
       XRAY_PID=
@@ -1243,6 +1288,24 @@ start_process_jobs() {
       mv "$orphan" "$orphan_job" 2>/dev/null || rm -f "$orphan"
     fi
   done
+  # Воркер снимает файл задания сразу после записи статуса working. Если он
+  # умер посреди скачивания или сборки (на роутере это обычно OOM), статус так
+  # и остался бы working: плановое обновление такую подписку пропускает, а
+  # supervisor держит перехват снятым. Возвращаем такие задания в очередь.
+  for stalled in "$STATUS_DIR"/p-*.conf; do
+    [ -f "$stalled" ] || continue
+    stalled_id=${stalled##*/}; stalled_id=${stalled_id%.conf}
+    case "$(state_get "$stalled" STATE)" in queued|working) ;; *) continue ;; esac
+    [ ! -f "$JOBS_DIR/$stalled_id.job" ] || continue
+    stalled_action=$(state_get "$stalled" ACTION)
+    case "$stalled_action" in fetch|build) ;; *) stalled_action=build ;; esac
+    [ "$stalled_action" = fetch ] || [ -s "$(profile_source "$stalled_id")" ] || stalled_action=fetch
+    if queue_job "$stalled_id" "$stalled_action"; then
+      event_log INFO "$stalled_id" "interrupted $stalled_action job queued again"
+    else
+      set_status "$stalled_id" error 'Задание было прервано' "$stalled_action" "$stalled_action" || true
+    fi
+  done
   process_jobs &
   JOBS_PID=$!
 }
@@ -1265,6 +1328,7 @@ API_REQUEST_BODY
 }
 
 failover_worker() {
+  adopt_self_pid
   failover_failures=0
   failover_profile=
   while :; do
@@ -1329,6 +1393,7 @@ start_failover_worker() {
 # Сторож httpd и воркеров. Живёт в подшелле, куда STOPPING не доходит, поэтому
 # цикл бесконечный: с завершением PID 1 его снимет ядро.
 watchdog() {
+  adopt_self_pid
   while :; do
     sleep 5
     if ! kill -0 "$HTTPD_PID" 2>/dev/null; then

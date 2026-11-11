@@ -281,6 +281,7 @@
     }
   }
 
+  // Значение x-hwid по умолчанию у каждой установки своё и приходит со статусом.
   const requiredHeaders = [
     ["x-hwid", "RouterOS-Solomon"],
     ["x-device-os", "RouterOS"],
@@ -319,8 +320,15 @@
   function renderHeaders(containerId, raw, includeRequired = false) {
     const parsed = parseHeaders(raw);
     const requiredNames = new Set(requiredHeaders.map(([name]) => name));
+    // Обязательный заголовок с пустым значением уходит со значением по
+    // умолчанию, поэтому его и показываем, а не пустое поле.
+    const fallbackFor = (name, fallback) => (name === "x-hwid" && model.default_hwid) || fallback;
     const headers = includeRequired
-      ? requiredHeaders.map(([name, fallback]) => parsed.find(([key]) => key.toLowerCase() === name) || [name, fallback, true]).concat(parsed.filter(([key]) => !requiredNames.has(key.toLowerCase())))
+      ? requiredHeaders.map(([name, fallback]) => {
+        const found = parsed.find(([key]) => key.toLowerCase() === name);
+        if (!found) return [name, fallbackFor(name, fallback), true];
+        return found[1] === "" ? [found[0], fallbackFor(name, fallback), found[2]] : found;
+      }).concat(parsed.filter(([key]) => !requiredNames.has(key.toLowerCase())))
       : parsed;
     $(containerId).innerHTML = headers.map(([name, value, enabled]) => headerRow(name, value, includeRequired && requiredNames.has(name.toLowerCase()), enabled !== false)).join("");
   }
@@ -577,7 +585,7 @@
             <button class="icon-button" type="button" data-profile-action="duplicate" data-profile-id="${escapeHtml(profile.id)}" title="Создать копию"${ui.busy.has("duplicate") ? " disabled" : ""}>${icon("copy")}</button>
             <button class="icon-button${working ? " loading" : ""}" type="button" data-profile-action="refresh" data-profile-id="${escapeHtml(profile.id)}" title="Обновить сейчас"${hasUrl && !working ? "" : " disabled"}>${icon("refresh")}</button>
             <button class="icon-button" type="button" data-profile-action="source" data-profile-id="${escapeHtml(profile.id)}" title="Полученный JSON">${icon("file")}</button>
-            <button class="icon-button danger" type="button" data-profile-action="delete" data-profile-id="${escapeHtml(profile.id)}" title="${model.profiles.length < 2 ? "Единственную подписку удалить нельзя" : "Удалить"}"${model.profiles.length < 2 ? " disabled" : ""}>${icon("trash")}</button>
+            <button class="icon-button danger" type="button" data-profile-action="delete" data-profile-id="${escapeHtml(profile.id)}" title="Удалить">${icon("trash")}</button>
           </div>
         </div>
         ${active ? renderConfigRows(profile) : ""}
@@ -655,6 +663,7 @@
       model.network_ct_syn_recv, model.network_ct_fin_wait, model.network_ct_close_wait,
       model.network_ct_last_ack, model.network_ct_time_wait, model.network_ct_close,
       model.network_ct_udp_stream, model.xray_sniffing_enabled, model.xray_sniffing_route_only,
+      model.xray_sniffing_inherit, model.xray_sniffing_excluded, model.default_hwid,
       model.network_tcp_notsent_lowat, model.network_tcp_slow_start_after_idle, model.network_tcp_mtu_probing,
       model.network_tcp_fin_timeout, model.network_tcp_congestion, model.network_tcp_buffer_max,
       model.tcp_congestion_available, model.sysctl,
@@ -692,7 +701,9 @@
   }
 
   function updateSniffingFields() {
-    $("xray-sniffing-route-only").disabled = !$("xray-sniffing-enabled").checked;
+    const on = $("xray-sniffing-enabled").checked;
+    $("xray-sniffing-route-only").disabled = !on;
+    $("xray-sniffing-excluded").disabled = !on;
   }
 
   function updateDnsOverrideFields() {
@@ -836,6 +847,8 @@
     $("xray-log-mask-address").checked = enabled(model.xray_log_mask_address);
     $("xray-sniffing-enabled").checked = Number(model.xray_sniffing_enabled ?? 1) !== 0;
     $("xray-sniffing-route-only").checked = Number(model.xray_sniffing_route_only ?? 0) !== 0;
+    $("xray-sniffing-inherit").checked = Number(model.xray_sniffing_inherit ?? 1) !== 0;
+    $("xray-sniffing-excluded").value = model.xray_sniffing_excluded || "";
     $("xray-probe-url").value = model.xray_probe_url || "https://www.gstatic.com/generate_204";
     $("xray-probe-timeout-seconds").value = model.xray_probe_timeout_seconds || 5;
     const probeMethod = String(model.xray_probe_http_method || "HEAD").toUpperCase();
@@ -1333,7 +1346,7 @@ Xray перезапустится, соединения через роутер 
     if (!$("settings-form").reportValidity()) return;
     await perform("settings", async () => {
       const listenerMode = document.querySelector('input[name="listener-mode"]:checked')?.value || "auto";
-      await api("save-settings", {
+      const result = await api("save-settings", {
         global_headers_present: "1",
         global_headers: collectHeaders("global-header-rows"),
         listener_mode: listenerMode,
@@ -1387,6 +1400,9 @@ Xray перезапустится, соединения через роутер 
         network_tcp_buffer_max: $("network-tcp-buffer-max").value,
         xray_sniffing_enabled: $("xray-sniffing-enabled").checked ? "1" : "0",
         xray_sniffing_route_only: $("xray-sniffing-route-only").checked ? "1" : "0",
+        xray_sniffing_inherit: $("xray-sniffing-inherit").checked ? "1" : "0",
+        xray_sniffing_excluded_present: "1",
+        xray_sniffing_excluded: $("xray-sniffing-excluded").value,
         xray_probe_url: $("xray-probe-url").value.trim(),
         xray_probe_timeout_seconds: $("xray-probe-timeout-seconds").value,
         xray_probe_http_method: $("xray-probe-http-method").value,
@@ -1399,7 +1415,8 @@ Xray перезапустится, соединения через роутер 
       });
       ui.settingsDirty = false;
       settingsFingerprint = "";
-      toast("Настройки сохранены");
+      if (result.warning) toast(`Настройки сохранены. ${result.warning}`, "error");
+      else toast("Настройки сохранены");
       await refresh(true);
     });
   }
@@ -1454,10 +1471,13 @@ Xray перезапустится, соединения через роутер 
 
   function requestDelete(profileId) {
     const profile = profileById(profileId);
-    if (!profile || model.profiles.length < 2) return;
+    if (!profile) return;
     ui.deleteProfileId = profileId;
     const active = profileId === model.active_profile_id;
-    $("delete-message").textContent = active
+    const last = model.profiles.length < 2;
+    $("delete-message").textContent = last
+      ? `Профиль «${profileName(profile)}», исходный JSON и рабочая конфигурация будут удалены. Это единственная подписка: Xray остановится, а на её месте останется пустая заготовка.`
+      : active
       ? `Профиль «${profileName(profile)}», исходный JSON и рабочая конфигурация будут удалены. Это выбранная подписка: контейнер переключится на другую и перезапустит Xray.`
       : `Профиль «${profileName(profile)}», исходный JSON и рабочая конфигурация будут удалены.`;
     $("delete-modal").classList.remove("hidden");

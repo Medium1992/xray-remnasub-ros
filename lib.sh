@@ -18,6 +18,19 @@ NETWORK_SYSCTL_ORIGINAL_FILE=$RUNTIME_DIR/sysctl.original
 
 mkdir -p "$PROFILES_DIR" "$JOBS_DIR" "$STATUS_DIR" "$ERRORS_DIR" "$CHECKS_DIR"
 
+# Воркеры entrypoint — подшеллы PID 1, и $$ у них остаётся равным 1. Блокировка,
+# подписанная таким номером, выглядела занятой живым процессом всегда, и после
+# гибели воркера её уже никто не снимал. Поэтому владелец блокировок — отдельная
+# переменная: воркер при старте записывает в неё свой настоящий PID.
+SELF_PID=$$
+adopt_self_pid() {
+  self_pid_value=
+  if [ -r /proc/self/stat ]; then
+    read -r self_pid_value self_pid_rest < /proc/self/stat 2>/dev/null || self_pid_value=
+  fi
+  case "$self_pid_value" in ''|*[!0-9]*) SELF_PID=$$ ;; *) SELF_PID=$self_pid_value ;; esac
+}
+
 valid_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; }
 # Значение sysctl: число в диапазоне либо слово system. Остальное заменяется
 # значением по умолчанию из последнего аргумента.
@@ -145,7 +158,7 @@ event_log() {
   [ -n "${GATEWAY_INTERFACE:-}" ] || [ -n "${REQUEST_METHOD:-}" ] || printf '%s\n' "$event_line"
   event_size=$(wc -c < "$EVENT_LOG" 2>/dev/null || printf 0)
   if valid_number "$event_size" && [ "$event_size" -gt 262144 ]; then
-    tail -c 131072 "$EVENT_LOG" > "$EVENT_LOG.tmp.$$" && mv "$EVENT_LOG.tmp.$$" "$EVENT_LOG"
+    tail -c 131072 "$EVENT_LOG" > "$EVENT_LOG.tmp.$SELF_PID" && mv "$EVENT_LOG.tmp.$SELF_PID" "$EVENT_LOG"
   fi
 }
 
@@ -211,7 +224,7 @@ lock_job() {
     fi
     sleep 0.05
   done
-  printf '%s\n' "$$" > "$lock_path/pid" || { rm -f "$lock_path/pid"; rmdir "$lock_path" 2>/dev/null; return 1; }
+  printf '%s\n' "$SELF_PID" > "$lock_path/pid" || { rm -f "$lock_path/pid"; rmdir "$lock_path" 2>/dev/null; return 1; }
 }
 
 unlock_job() {
@@ -607,6 +620,9 @@ load_settings() {
     read -r LOCAL_HTTP_PASS_B64
     read -r UI_THEME
     read -r UI_ACCENT
+    read -r XRAY_SNIFFING_INHERIT
+    read -r XRAY_SNIFFING_EXCLUDE_B64
+    read -r DEFAULT_HWID
   } <<EOF
 $(state_load "$STATE" \
   ACTIVE_PROFILE_ID RUN_ENABLED GLOBAL_HEADERS_B64 LISTENER_MODE REDIR_PORT TPROXY_PORT LOG_LEVEL \
@@ -625,7 +641,8 @@ $(state_load "$STATE" \
   INBOUND_STRIP_SOCKS INBOUND_STRIP_HTTP \
   LOCAL_SOCKS_ENABLED LOCAL_SOCKS_PORT LOCAL_SOCKS_USER_B64 LOCAL_SOCKS_PASS_B64 \
   LOCAL_HTTP_ENABLED LOCAL_HTTP_PORT LOCAL_HTTP_USER_B64 LOCAL_HTTP_PASS_B64 \
-  UI_THEME UI_ACCENT)
+  UI_THEME UI_ACCENT \
+  XRAY_SNIFFING_INHERIT XRAY_SNIFFING_EXCLUDE_B64 DEFAULT_HWID)
 EOF
 
   case "$RUN_ENABLED" in 0|1) ;; *) RUN_ENABLED=0 ;; esac
@@ -662,6 +679,17 @@ EOF
   valid_sysctl_number NETWORK_TCP_BUFFER_MAX 65536 536870912 system
   case "$XRAY_SNIFFING_ENABLED" in 0|1) ;; *) XRAY_SNIFFING_ENABLED=1 ;; esac
   case "$XRAY_SNIFFING_ROUTE_ONLY" in 0|1) ;; *) XRAY_SNIFFING_ROUTE_ONLY=1 ;; esac
+  # Ключа нет в настройках, сохранённых до появления наследования. Тот, кто
+  # менял sniffing руками, свои значения и сохраняет; нетронутые умолчания
+  # уступают настройкам из подписки.
+  case "$XRAY_SNIFFING_INHERIT" in
+    0|1) ;;
+    *) if [ "$XRAY_SNIFFING_ENABLED:$XRAY_SNIFFING_ROUTE_ONLY" = 1:1 ]; then XRAY_SNIFFING_INHERIT=1; else XRAY_SNIFFING_INHERIT=0; fi ;;
+  esac
+  # Установки, сделанные до появления своего идентификатора, остаются на общем:
+  # смена x-hwid заняла бы у провайдера ещё одно место в лимите устройств.
+  case "$DEFAULT_HWID" in ''|*[!A-Za-z0-9._-]*) DEFAULT_HWID=RouterOS-Solomon ;; esac
+  [ "${#DEFAULT_HWID}" -le 64 ] || DEFAULT_HWID=RouterOS-Solomon
   probe_url=$(b64_decode "$XRAY_PROBE_URL_B64")
   case "$probe_url" in http://*|https://*) ;; *) XRAY_PROBE_URL_B64=aHR0cHM6Ly93d3cuZ3N0YXRpYy5jb20vZ2VuZXJhdGVfMjA0 ;; esac
   valid_number "$XRAY_PROBE_TIMEOUT_SECONDS" && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -ge 1 ] && [ "$XRAY_PROBE_TIMEOUT_SECONDS" -le 30 ] || XRAY_PROBE_TIMEOUT_SECONDS=5
@@ -752,6 +780,9 @@ LOCAL_HTTP_USER_B64=$LOCAL_HTTP_USER_B64
 LOCAL_HTTP_PASS_B64=$LOCAL_HTTP_PASS_B64
 UI_THEME=$UI_THEME
 UI_ACCENT=$UI_ACCENT
+XRAY_SNIFFING_INHERIT=${XRAY_SNIFFING_INHERIT:-1}
+XRAY_SNIFFING_EXCLUDE_B64=${XRAY_SNIFFING_EXCLUDE_B64:-}
+DEFAULT_HWID=${DEFAULT_HWID:-RouterOS-Solomon}
 EOF
   atomic_replace "$state_tmp" "$STATE"
 }
@@ -804,7 +835,15 @@ build_xray_config() {
   BUILD_REQUESTED_INDEX=$(state_get "$build_profile" SELECTED_INDEX 0)
   valid_number "$BUILD_REQUESTED_INDEX" || BUILD_REQUESTED_INDEX=0
   BUILD_REQUESTED_FINGERPRINT=$(state_get "$build_profile" SELECTED_FINGERPRINT)
+  # Воркер заданий и воркер проверки оверрайдов — подшеллы PID 1, и $$ у них
+  # общий. Без своей метки они собирали кандидата в одном каталоге, и проверка,
+  # закончившись, удаляла его из-под рабочей сборки.
+  build_tag=$$
   build_validation=$RUNTIME_DIR/$build_id.validation.log
+  if [ "${BUILD_QUIET:-0}" = 1 ]; then
+    build_tag=$$.check
+    build_validation=$RUNTIME_DIR/$build_id.check-validation.log
+  fi
   : > "$build_validation"
   [ -s "$build_source" ] || { BUILD_ERROR='Subscription has not been downloaded'; return 1; }
   if ! jq -e 'type == "array" and all(.[]; type == "object" and (.outbounds | type == "array" and length > 0))' "$build_source" >/dev/null 2>&1; then
@@ -844,7 +883,7 @@ build_xray_config() {
   fi
   case "$build_listener_mode" in tproxy|redir-tproxy|redir-tun) ;; *) BUILD_ERROR='RouterOS listener mode is invalid'; return 1 ;; esac
 
-  BUILD_CANDIDATE_DIR=$RUNTIME_DIR/$build_id.candidate.$$
+  BUILD_CANDIDATE_DIR=$RUNTIME_DIR/$build_id.candidate.$build_tag
   build_metadata=$BUILD_CANDIDATE_DIR/.metadata
   if ! mkdir -p "$build_metadata"; then
     BUILD_ERROR='Could not create candidate configuration directory'
@@ -970,6 +1009,31 @@ build_xray_config() {
   fi
   rm -f "$build_metadata/configs.unselected.json"
 
+  # Входы контейнер ставит свои, но настройки sniffing у них по умолчанию те,
+  # что автор подписки задал своим: destOverride, исключения доменов, routeOnly.
+  # Снимаем их до вырезания. Сначала смотрим перехватывающие входы, затем
+  # локальные; из равных берётся тот, где sniffing включён.
+  build_source_sniffing=null
+  build_source_sniffing_from=
+  if [ "$XRAY_SNIFFING_INHERIT" = 1 ]; then
+    build_sniffing_found=$(jq -c '
+        def kind: ((.protocol? // "") | tostring | ascii_downcase);
+        def rank: kind | if . == "dokodemo-door" or . == "tunnel" or . == "tun" then 0
+                         elif . == "socks" or . == "mixed" then 1
+                         elif . == "http" then 2 else 3 end;
+        [(.inbounds // [])[]? | select(type == "object" and (.sniffing | type) == "object")] |
+        map({rank: (rank + (if .sniffing.enabled == true then 0 else 10 end)),
+             from: ((((.tag? // "") | tostring) | if length > 0 then . else "(untagged)" end) + "/" + kind),
+             sniffing: .sniffing}) |
+        sort_by(.rank) | .[0] // empty
+      ' "$BUILD_CANDIDATE_DIR/10-subscription.json" 2>/dev/null) || build_sniffing_found=
+    if [ -n "$build_sniffing_found" ]; then
+      build_source_sniffing=$(printf '%s' "$build_sniffing_found" | jq -c '.sniffing' 2>/dev/null) || build_source_sniffing=null
+      [ -n "$build_source_sniffing" ] || build_source_sniffing=null
+      build_source_sniffing_from=$(printf '%s' "$build_sniffing_found" | jq -r '.from' 2>/dev/null | tr -d '\r\n' | head -c 160)
+    fi
+  fi
+
   # dokodemo-door и tun из подписки вырезаются всегда, socks/mixed и http — по
   # флажкам.
   build_stripped_inbounds=$(jq -r \
@@ -1005,7 +1069,7 @@ build_xray_config() {
   # Замена секции целиком, а не слияние: dns.servers — массив. Подстановка в
   # фрагмент подписки, чтобы ссылки на geosite: из оверрайда учитывались ниже.
   if [ "$DNS_OVERRIDE_ENABLED" = 1 ]; then
-    build_dns_override=$RUNTIME_DIR/$build_id.dns-override.$$.json
+    build_dns_override=$RUNTIME_DIR/$build_id.dns-override.$build_tag.json
     b64_decode "$DNS_OVERRIDE_B64" > "$build_dns_override"
     if ! jq -e 'type == "object"' "$build_dns_override" >/dev/null 2>&1; then
       rm -f "$build_dns_override"
@@ -1013,7 +1077,7 @@ build_xray_config() {
       discard_build_candidate
       return 1
     fi
-    build_dns_tmp=$RUNTIME_DIR/$build_id.dns-merged.$$.json
+    build_dns_tmp=$RUNTIME_DIR/$build_id.dns-merged.$build_tag.json
     if ! jq --slurpfile override "$build_dns_override" '.dns = $override[0]' \
          "$BUILD_CANDIDATE_DIR/10-subscription.json" > "$build_dns_tmp" ||
        ! mv "$build_dns_tmp" "$BUILD_CANDIDATE_DIR/10-subscription.json"; then
@@ -1029,7 +1093,7 @@ build_xray_config() {
   # Свои правила маршрутизации вставляются в массив подписки. Отдельным файлом
   # confdir их не добавить: Config.Override заменяет секцию routing целиком.
   if [ "$ROUTING_RULES_ENABLED" = 1 ]; then
-    build_rules=$RUNTIME_DIR/$build_id.rules.$$.json
+    build_rules=$RUNTIME_DIR/$build_id.rules.$build_tag.json
     b64_decode "$ROUTING_RULES_B64" > "$build_rules"
     if ! jq -e 'type == "array" and all(.[]; type == "object")' "$build_rules" >/dev/null 2>&1; then
       rm -f "$build_rules"
@@ -1037,7 +1101,7 @@ build_xray_config() {
       discard_build_candidate
       return 1
     fi
-    build_rules_tmp=$RUNTIME_DIR/$build_id.rules-merged.$$.json
+    build_rules_tmp=$RUNTIME_DIR/$build_id.rules-merged.$build_tag.json
     if ! jq --slurpfile rules "$build_rules" --arg position "$ROUTING_RULES_POSITION" '
          .routing = ((.routing // {}) |
            .rules = (if $position == "after"
@@ -1055,7 +1119,7 @@ build_xray_config() {
   fi
 
   if [ "$EXTRA_OUTBOUNDS_ENABLED" = 1 ]; then
-    build_outbounds=$RUNTIME_DIR/$build_id.outbounds.$$.json
+    build_outbounds=$RUNTIME_DIR/$build_id.outbounds.$build_tag.json
     b64_decode "$EXTRA_OUTBOUNDS_B64" > "$build_outbounds"
     if ! jq -e 'type == "array" and all(.[]; type == "object" and has("protocol") and (.tag | type) == "string")'          "$build_outbounds" >/dev/null 2>&1; then
       rm -f "$build_outbounds"
@@ -1075,7 +1139,7 @@ build_xray_config() {
       discard_build_candidate
       return 1
     fi
-    build_outbounds_tmp=$RUNTIME_DIR/$build_id.outbounds-merged.$$.json
+    build_outbounds_tmp=$RUNTIME_DIR/$build_id.outbounds-merged.$build_tag.json
     # В конец: Xray без routing отправляет трафик в первый outbound, и вставка
     # своего в начало забрала бы себе всё.
     if ! jq --slurpfile extra "$build_outbounds" '.outbounds = ((.outbounds // []) + $extra[0])'          "$BUILD_CANDIDATE_DIR/10-subscription.json" > "$build_outbounds_tmp" ||
@@ -1212,7 +1276,7 @@ build_xray_config() {
        "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1 &&
      jq -e 'has("geodata") and .geodata != null' \
        "$BUILD_CANDIDATE_DIR/10-subscription.json" >/dev/null 2>&1; then
-    build_geodata_strip=$RUNTIME_DIR/$build_id.geodata-strip.$$.json
+    build_geodata_strip=$RUNTIME_DIR/$build_id.geodata-strip.$build_tag.json
     if ! jq 'del(.geodata)' "$BUILD_CANDIDATE_DIR/10-subscription.json" > "$build_geodata_strip" ||
        ! mv "$build_geodata_strip" "$BUILD_CANDIDATE_DIR/10-subscription.json"; then
       rm -f "$build_geodata_strip"
@@ -1277,6 +1341,8 @@ build_xray_config() {
        --argjson sniffing_enabled "$build_sniffing" \
        --argjson route_only "$build_route_only" \
        --argjson fakedns "$build_fakedns" \
+       --argjson inherited "$build_source_sniffing" \
+       --arg excluded "$(b64_decode "$XRAY_SNIFFING_EXCLUDE_B64")" \
        --argjson socks_enabled "$LOCAL_SOCKS_ENABLED" \
        --argjson socks_port "$LOCAL_SOCKS_PORT" \
        --arg socks_user "$(b64_decode "$LOCAL_SOCKS_USER_B64")" \
@@ -1285,12 +1351,16 @@ build_xray_config() {
        --argjson http_port "$LOCAL_HTTP_PORT" \
        --arg http_user "$(b64_decode "$LOCAL_HTTP_USER_B64")" \
        --arg http_pass "$(b64_decode "$LOCAL_HTTP_PASS_B64")" '
-       def managed_sniffing: {
+       # Список уже очищен от пробелов при сохранении: регулярных выражений в jq
+       # сборки для armv5 нет.
+       ($excluded | split("\n") | map(select(length > 0))) as $own_excluded |
+       def own_sniffing: {
          enabled:$sniffing_enabled,
          destOverride:(["http","tls","quic"] + (if $fakedns then ["fakedns"] else [] end)),
          metadataOnly:false,
          routeOnly:$route_only
-       };
+       } + (if ($own_excluded | length) > 0 then {domainsExcluded:$own_excluded} else {} end);
+       def managed_sniffing: if ($inherited | type) == "object" then $inherited else own_sniffing end;
        (if $socks_enabled == 1 then [
          {tag:"xray-remnasub-socks",port:$socks_port,protocol:"socks",
           settings:({udp:true} + (if $socks_user == "" then {auth:"noauth"}
@@ -1316,6 +1386,11 @@ build_xray_config() {
     BUILD_ERROR='Could not assemble RouterOS configuration overlay'
     discard_build_candidate
     return 1
+  fi
+  if [ -n "$build_source_sniffing_from" ]; then
+    build_event INFO "$build_id" "sniffing settings taken from source inbound $build_source_sniffing_from"
+  elif [ "$XRAY_SNIFFING_INHERIT" = 1 ]; then
+    build_event INFO "$build_id" 'source inbounds carry no sniffing settings; container settings are used'
   fi
   chmod 700 "$BUILD_CANDIDATE_DIR" "$build_metadata" 2>/dev/null || true
   chmod 600 "$BUILD_CANDIDATE_DIR/10-subscription.json" "$BUILD_CANDIDATE_DIR/70-container-geodata-tail.json" "$BUILD_CANDIDATE_DIR/80-container-log.json" "$BUILD_CANDIDATE_DIR/90-container-inbounds.json" "$build_metadata/configs.json" "$build_metadata/geodata.json" "$build_metadata/listener.json" "$build_metadata/source.sha256" 2>/dev/null || true

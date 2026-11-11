@@ -159,13 +159,15 @@ Container-managed inbound tags are stable and reserved:
 
 The container does not rewrite `routing.rules[].inboundTag`. Rules without `inboundTag` continue to apply to every inbound. A rule containing a source inbound tag remains scoped to that source inbound; list the required tags from the table in the subscription template to target RouterOS traffic. A source inbound using a reserved tag is rejected so that a later `confdir` fragment cannot replace it silently.
 
-An authoritative empty response, HTTP `401/403/404/410/451`, or an explicit HWID restriction disables the active runtime. Transport errors, timeouts, `5xx`, malformed JSON, and invalid Xray configurations retain the last-good version.
+By default the container-managed inbounds take their sniffing settings from the subscription inbounds: `destOverride`, `domainsExcluded`, `routeOnly` and the rest are carried over as is. Intercepting inbounds (`dokodemo-door`, `tun`) are looked at first, then `socks`/`mixed` and `http`; among equals the one with sniffing enabled wins. When the subscription inbounds carry no sniffing settings, the container settings apply. The "Sniffing from the subscription" switch turns inheritance off, and then the container settings — the enable switch, route-only and the exclusion list — always apply.
+
+An authoritative empty response or an explicit HWID restriction disables the active runtime at once. HTTP `401/403/404/410/451` disables it after three refusals in a row: a single refusal can also come from a protection layer in front of the panel, so after the first and the second one the working configuration is kept and the request is repeated in five minutes. When there is no working configuration yet, the refusal applies at once. Old credentials do not keep working after the third refusal. Transport errors, timeouts, `5xx`, malformed JSON, and invalid Xray configurations retain the last-good version.
 
 ## 📨 Request Headers
 
 ![Settings - headers](/docs/screenshots/settings-headers.png)
 
-Remnawave picks the subscription format from the `User-Agent`, so the container sends a client header set: `x-hwid`, `x-device-os`, `x-ver-os`, `x-device-model` and `user-agent`. A value you set explicitly always wins over the substituted one.
+Remnawave picks the subscription format from the `User-Agent`, so the container sends a client header set: `x-hwid`, `x-device-os`, `x-ver-os`, `x-device-model` and `user-agent`. A value you set explicitly always wins over the substituted one. The default `x-hwid` is generated on first start and is unique per installation; installations made before this feature keep the previous shared value until you set your own.
 
 Every row carries a send checkbox. Clearing it removes that header from the request entirely — for a required key that means its default is not sent either. The row itself is kept along with its value, so one checkbox brings it back without retyping anything.
 

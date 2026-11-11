@@ -25,6 +25,16 @@ NETWORK_TCP_BUFFER_MAX=${NETWORK_TCP_BUFFER_MAX:-system}
 NETWORK_INFO_FILE=${NETWORK_INFO_FILE:-}
 NETWORK_SYSCTL_ORIGINAL_FILE=${NETWORK_SYSCTL_ORIGINAL_FILE:-}
 
+# Скрипт идёт под set -e, но сетевые параметры применяются по принципу «что
+# получилось»: набор sysctl и возможностей ядра у RouterOS свой на каждой
+# платформе. Отказ одного шага не должен обрывать остальные и сводку для
+# панели, поэтому он копится здесь и превращается в код возврата в самом конце.
+NETWORK_FAILED=0
+network_warn() {
+  printf '%s\n' "$*" >&2
+  NETWORK_FAILED=1
+}
+
 resolve_interface() {
   if [ "$NETWORK_INTERFACE" != auto ] && ip link show dev "$NETWORK_INTERFACE" >/dev/null 2>&1; then
     printf '%s\n' "$NETWORK_INTERFACE"
@@ -93,7 +103,9 @@ for table_pref in 'local 0' 'main 32766' 'default 32767'; do
   for pref in $(ip rule show | awk -v table="$table" '$2 == "from" && $3 == "all" && $4 == "lookup" && $5 == table && NF == 5 {gsub(/:/, "", $1); print $1}'); do
     ip rule del pref "$pref" 2>/dev/null || true
   done
-  ip rule add pref "$wanted" lookup "$table"
+  ip rule add pref "$wanted" lookup "$table" 2>/dev/null ||
+    ip rule show 2>/dev/null | grep -q "lookup $table\$" ||
+    network_warn "could not restore the '$table' routing rule at priority $wanted"
 done
 
 # Сокеты контейнера, то есть исходящие соединения Xray к серверам. Контейнер
@@ -103,13 +115,20 @@ done
 # панели. Исходные значения ядра запоминаются при первом запуске: system
 # означает вернуть их, а не оставить выставленное ранее.
 sysctl_path() { printf '/proc/sys/%s' "$(printf '%s' "$1" | tr . /)"; }
+# Читает файл из /proc/sys с пробелами вместо табуляций. Отсутствующий или
+# нечитаемый файл — пустая строка, а не ошибка: под set -e неудачное
+# перенаправление внутри подстановки команд обрывало весь скрипт.
+sysctl_read() {
+  [ -r "$1" ] || return 0
+  { tr -s '\t ' '  ' < "$1"; } 2>/dev/null || true
+}
 
 if [ -n "$NETWORK_SYSCTL_ORIGINAL_FILE" ] && [ ! -f "$NETWORK_SYSCTL_ORIGINAL_FILE" ]; then
   for name in net.ipv4.tcp_notsent_lowat net.ipv4.tcp_slow_start_after_idle net.ipv4.tcp_mtu_probing \
               net.ipv4.tcp_fin_timeout net.ipv4.tcp_congestion_control net.ipv4.tcp_rmem net.ipv4.tcp_wmem; do
     path=$(sysctl_path "$name")
     [ -r "$path" ] || continue
-    printf '%s=%s\n' "$name" "$(tr -s '\t ' '  ' < "$path")"
+    printf '%s=%s\n' "$name" "$(sysctl_read "$path")"
   done > "$NETWORK_SYSCTL_ORIGINAL_FILE.tmp" && mv "$NETWORK_SYSCTL_ORIGINAL_FILE.tmp" "$NETWORK_SYSCTL_ORIGINAL_FILE"
 fi
 
@@ -136,8 +155,8 @@ sysctl_apply() {
     [ -n "$wanted" ] || { SYSCTL_REPORT="${SYSCTL_REPORT}SYSCTL_$label=system
 "; return 0; }
   fi
-  printf '%s\n' "$wanted" > "$path" 2>/dev/null || true
-  current=$(tr -s '\t ' '  ' < "$path" 2>/dev/null)
+  { printf '%s\n' "$wanted" > "$path"; } 2>/dev/null || true
+  current=$(sysctl_read "$path")
   [ "$current" = "$wanted" ] || result=readonly
   SYSCTL_REPORT="${SYSCTL_REPORT}SYSCTL_$label=$result
 "
@@ -148,8 +167,17 @@ sysctl_apply TCP_SLOW_START_AFTER_IDLE net.ipv4.tcp_slow_start_after_idle "$NETW
 sysctl_apply TCP_MTU_PROBING net.ipv4.tcp_mtu_probing "$NETWORK_TCP_MTU_PROBING"
 sysctl_apply TCP_FIN_TIMEOUT net.ipv4.tcp_fin_timeout "$NETWORK_TCP_FIN_TIMEOUT"
 
-cc_available=$(tr -cd 'a-z0-9_ ' < /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null)
-if [ "$NETWORK_TCP_CONGESTION" != system ] && ! printf ' %s ' "$cc_available" | grep -q " $NETWORK_TCP_CONGESTION "; then
+# В netns контейнера RouterOS списка алгоритмов может не быть вовсе: тогда в
+# списке остаётся только действующий, а выбранный вручную всё равно пробуем
+# записать — sysctl_apply перечитает значение и честно покажет readonly.
+cc_available_path=/proc/sys/net/ipv4/tcp_available_congestion_control
+cc_list_known=0
+[ ! -r "$cc_available_path" ] || cc_list_known=1
+cc_available=$(sysctl_read "$cc_available_path" | tr -cd 'a-z0-9_ ')
+[ -n "$cc_available" ] ||
+  cc_available=$(sysctl_read /proc/sys/net/ipv4/tcp_congestion_control | tr -cd 'a-z0-9_ ')
+if [ "$NETWORK_TCP_CONGESTION" != system ] && [ "$cc_list_known" = 1 ] &&
+   ! printf ' %s ' "$cc_available" | grep -q " $NETWORK_TCP_CONGESTION "; then
   SYSCTL_REPORT="${SYSCTL_REPORT}SYSCTL_TCP_CONGESTION=unavailable
 "
 else
@@ -165,7 +193,7 @@ for buffer_sysctl in tcp_rmem tcp_wmem; do
     continue
   fi
   original=$(sysctl_original "net.ipv4.$buffer_sysctl") ||
-    original=$(tr -s '\t ' '  ' < "/proc/sys/net/ipv4/$buffer_sysctl" 2>/dev/null)
+    original=$(sysctl_read "/proc/sys/net/ipv4/$buffer_sysctl")
   set -- $original
   if [ $# -ne 3 ]; then
     SYSCTL_REPORT="${SYSCTL_REPORT}SYSCTL_$label=missing
@@ -192,3 +220,4 @@ fi
 printf 'interface=%s ipv6_disabled=%s qdisc=%s multicast_disabled=%s\n' \
   "$iface" "$NETWORK_DISABLE_IPV6" "$NETWORK_QDISC" "$NETWORK_DISABLE_MULTICAST"
 printf '%s' "$SYSCTL_REPORT" | sed 's/^SYSCTL_/sysctl /'
+[ "$NETWORK_FAILED" = 0 ]

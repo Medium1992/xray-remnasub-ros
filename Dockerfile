@@ -1,4 +1,7 @@
-FROM --platform=$BUILDPLATFORM alpine:latest AS package
+# Версия базового образа зафиксирована: с alpine:latest одна и та же ревизия
+# репозитория в разные дни собиралась в разные образы.
+ARG ALPINE_VERSION=3.23
+FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS package
 ARG TARGETARCH
 ARG TARGETVARIANT
 ARG XRAY_CUSTOM_CORE=0
@@ -32,9 +35,9 @@ COPY scripts /final/scripts
 COPY LICENSE /final/usr/share/licenses/xray-remnasub-ros/LICENSE
 RUN chmod 0755 /final/entrypoint.sh /final/lib.sh /final/www/cgi-bin/api /final/scripts/*.sh
 
-FROM --platform=linux/amd64 alpine:latest AS linux-amd64
-FROM --platform=linux/arm64 alpine:latest AS linux-arm64
-FROM --platform=linux/arm/v7 alpine:latest AS linux-armv7
+FROM --platform=linux/amd64 alpine:${ALPINE_VERSION} AS linux-amd64
+FROM --platform=linux/arm64 alpine:${ALPINE_VERSION} AS linux-arm64
+FROM --platform=linux/arm/v7 alpine:${ALPINE_VERSION} AS linux-armv7
 FROM --platform=linux/arm/v5 scratch AS linux-armv5
 ADD rootfs.tar /
 

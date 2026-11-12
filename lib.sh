@@ -1320,6 +1320,18 @@ build_xray_config() {
       build_event INFO "$build_id" "DNS inbound on port $DNS_INBOUND_PORT routed to the container dns outbound; the subscription has none"
     else
       build_event INFO "$build_id" "DNS inbound on port $DNS_INBOUND_PORT routed to subscription outbound $build_dns_outbound"
+      # Частая ошибка в подписках: "domains" вместо "domain". Ядро неизвестный
+      # ключ молча пропускает, правило остаётся без условия и срабатывает на
+      # любой запрос (proxy/dns/dns.go, DNSRule.Apply).
+      build_dns_bad_rules=$(jq -r --arg tag "$build_dns_outbound" '
+          [(.outbounds // [])[]? | select(.tag? == $tag)][0] |
+          [(.settings.rules? // []) | if type == "array" then .[] else empty end |
+           select(type == "object" and has("domains") and (has("domain") | not)) |
+           ((.action? // "?") | tostring)] | join(", ")
+        ' "$BUILD_CANDIDATE_DIR/10-subscription.json" 2>/dev/null || true)
+      if [ -n "$build_dns_bad_rules" ]; then
+        build_event WARN "$build_id" "outbound $build_dns_outbound has rules with \"domains\" (actions: $build_dns_bad_rules); the core reads \"domain\", so such a rule has no domain condition and applies to every query"
+      fi
       # dokodemo без address отдаёт запрос с назначением 127.0.0.1:<порт>.
       # Пересылка по назначению (action direct, у старых подписок nonIPQuery
       # skip) без dialerProxy и без своего адреса вернула бы его в этот же вход.
@@ -1464,6 +1476,7 @@ build_xray_config() {
   # Sniffing своих входов: унаследованный или свой, со своими исключениями.
   # Списки уже очищены от пробелов при сохранении: регулярных выражений в jq
   # сборки для armv5 нет.
+  build_sniffing_err=$build_metadata/sniffing.err
   if ! build_sniffing_plan=$(jq -n -c \
        --argjson sniffing_enabled "$build_sniffing" \
        --argjson route_only "$build_route_only" \
@@ -1514,10 +1527,13 @@ build_xray_config() {
              if $len < 0 or $len > ($b | length) then null else {bits: $b, len: $len} end
            end
          end;
-       def overlaps($pool):
-         (cidr) as $x | ($pool | cidr) as $y |
+       # Привязка "as" — только в начале выражения или в скобках: jq 1.8
+       # связывает её с бинарными операторами слева иначе, чем 1.7, и
+       # "a and (b | min) as $m | ..." отдавал бы в $m результат всего and.
+       def overlaps($y):
+         . as $x |
          $x != null and $y != null and ($x.bits | length) == ($y.bits | length) and
-         ([$x.len, $y.len] | min) as $m | $x.bits[0:$m] == $y.bits[0:$m];
+         (([$x.len, $y.len] | min) as $m | $x.bits[0:$m] == $y.bits[0:$m]);
        def with_exclusions:
          (if ($own_excluded | length) > 0 then .domainsExcluded = ((.domainsExcluded | string_list) + $own_excluded | unique) else . end) |
          (if ($own_excluded_ips | length) > 0 then .ipsExcluded = ((.ipsExcluded | string_list) + $own_excluded_ips | unique) else . end);
@@ -1532,8 +1548,12 @@ build_xray_config() {
        # домен (app/dispatcher/default.go, shouldOverride). Сеть, задевающая
        # пул, из своих входов убирается; состав geoip и ext-ip без разбора
        # .dat не узнать, о них только предупреждение.
-       (if $fakedns then [$ips[] | . as $entry | select(any($pools[]; . as $pool | $entry | overlaps($pool)))] else [] end) as $removed |
-       (if $fakedns then [$ips[] | select(startswith("geoip:") or startswith("ext-ip:"))] else [] end) as $suspicious |
+       # Каждая сеть разбирается один раз: на роутере сотни записей на два
+       # пула заметны.
+       ([$pools[] | cidr | select(. != null)]) as $pool_cidrs |
+       (if $fakedns then [$ips[] | select(type == "string") | . as $entry | (cidr) as $c |
+          select(any($pool_cidrs[]; . as $pool | $c | overlaps($pool))) | $entry] else [] end) as $removed |
+       (if $fakedns then [$ips[] | select(type == "string" and (startswith("geoip:") or startswith("ext-ip:")))] else [] end) as $suspicious |
        ($sniffing |
         (if ($removed | length) > 0 then .ipsExcluded = [$ips[] | . as $entry | select(($removed | index($entry)) == null)] else . end) |
         (if (.ipsExcluded | type) == "array" and (.ipsExcluded | length) == 0 then del(.ipsExcluded) else . end)) as $result |
@@ -1544,11 +1564,12 @@ build_xray_config() {
         removed: [$removed[] | {entry: ., from: origin}],
         suspicious: $suspicious,
         added_fakedns: $add_fakedns}
-     '); then
-    BUILD_ERROR='Could not assemble sniffing settings for container inbounds'
+     ' 2> "$build_sniffing_err"); then
+    BUILD_ERROR="Could not assemble sniffing settings for container inbounds: $(tr '\n' ' ' < "$build_sniffing_err" 2>/dev/null | head -c 600)"
     discard_build_candidate
     return 1
   fi
+  rm -f "$build_sniffing_err"
   build_managed_sniffing=$(printf '%s' "$build_sniffing_plan" | jq -c '.sniffing')
   if ! jq -n --arg log_level "$LOG_LEVEL" --arg error "$XRAY_LOG_ERROR" --arg access "$XRAY_LOG_ACCESS" \
         --argjson dns_log "$XRAY_LOG_DNS" --argjson mask_address "$XRAY_LOG_MASK_ADDRESS" \

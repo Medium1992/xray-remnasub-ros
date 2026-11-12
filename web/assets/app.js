@@ -973,10 +973,11 @@
     ui.editorDirty = false;
   }
 
-  async function readProfileJson(kind, profileId) {
+  async function readProfileJson(kind, profileId, meta = {}) {
     const response = await fetch(`/cgi-bin/api?action=${encodeURIComponent(kind)}&profile_id=${encodeURIComponent(profileId)}`);
     const text = await response.text();
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    meta.stale = response.headers.get("X-Runtime-Stale") === "1";
     try {
       const parsed = JSON.parse(text);
       return parsed === null ? "Файл ещё не создан." : JSON.stringify(parsed, null, 2);
@@ -1069,9 +1070,14 @@
     layer.classList.remove("hidden");
     $("runtime-sections").innerHTML = "";
     try {
-      const text = await readProfileJson(kind, profileId);
+      const meta = {};
+      const text = await readProfileJson(kind, profileId, meta);
       showJson(viewer, text);
-      if (!source) {
+      if (!source && meta.stale) {
+        // Сборка из прежней версии подписки или другого конфига: сравнение
+        // с текущим JSON показало бы чужие отличия как правки контейнера.
+        $("runtime-sections").innerHTML = `<span class="runtime-section stale">Это прежняя рабочая конфигурация: последняя сборка не прошла, поэтому она собрана из предыдущей версии подписки или из другого конфига. Сравнение с текущим JSON подписки не показывается.</span>`;
+      } else if (!source) {
         // Исходник берётся отдельным запросом: сравнивать надо с тем, что
         // прислал провайдер, а не с тем, что уже собрано.
         try {

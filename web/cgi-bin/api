@@ -510,7 +510,20 @@ EOF
   GET:source|GET:config)
     id=$(url_decode "$(query_value profile_id)"); valid_profile_id "$id" || reply_error 'Invalid profile'
     [ "$action" = source ] && file=$(profile_source "$id") || file=$(profile_runtime "$id")
-    printf 'Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
+    # Рабочая конфигурация остаётся прежней, когда новая сборка не прошла. Тогда
+    # она собрана из другой версии подписки или другого конфига, и панель не
+    # должна выдавать расхождение с ними за правки контейнера.
+    runtime_stale=0
+    if [ "$action" = config ] && [ -f "$file" ]; then
+      runtime_meta=${file%/*}
+      runtime_built_sha=$(cat "$runtime_meta/source.sha256" 2>/dev/null || true)
+      runtime_source_sha=$(openssl dgst -sha256 "$(profile_source "$id")" 2>/dev/null | awk '{print $NF}')
+      runtime_built_index=$(jq -r '[.[] | select(.selected == true) | .index][0] // empty' "$runtime_meta/configs.json" 2>/dev/null || true)
+      runtime_selected_index=$(state_get "$(profile_path "$id")" SELECTED_INDEX 0)
+      [ -n "$runtime_built_sha" ] && [ "$runtime_built_sha" = "$runtime_source_sha" ] &&
+        [ "$runtime_built_index" = "$runtime_selected_index" ] || runtime_stale=1
+    fi
+    printf 'Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Runtime-Stale: %s\r\n\r\n' "$runtime_stale"
     [ -f "$file" ] && cat "$file" || printf 'null\n'
     exit 0
     ;;
